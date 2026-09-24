@@ -1,0 +1,12 @@
+이 저장소의 공통 지식 맵과 규칙은 **`CLAUDE.md`를 그대로 따른다** — 지식 맵(`docs/`), ADR 불변 규칙, 매 턴 자기평가(상세는 `docs/rules.md`) 포함. Codex도 작업 전 `CLAUDE.md`·`docs/rules.md`와 필요한 `docs/`를 먼저 읽는다.
+
+## 협업 (Claude와 턴제)
+
+Claude와 Codex는 대화 맥락을 공유하지 못한다. `docs/worklog.md`(작업 일지)로 서로의 "왜"를 잇는다.
+
+- **턴 시작 — 따라잡기**: `node scripts/worklog.mjs catchup codex` 로 책갈피 이후 밀린 내용을 읽는다(Claude와만 진행된 턴들). Codex 훅으로 자동화하거나 수동 실행.
+- **턴 끝 — 기록**: 매 턴 한 줄로 남긴다.
+  `node scripts/worklog.mjs append codex "<물음 요약>" "<결과 요약>"`
+  "요약할 때"라고 나오면 이어서: `node scripts/worklog.mjs summary codex "<최근 3턴 통합 요약>"`
+- 일지는 **덧붙이기만.** Claude의 기록에 이견이 있으면 새 항목으로 남긴다(예: "Claude의 #12 판단에 반대 — 이유 …"). 다음 Claude 턴이 따라잡기로 읽는다.
+- 병렬 작업은 별도 디렉토리에서. 같은 일지에 동시 기록 금지(충돌). 합류 지점에서 서로 읽는다.

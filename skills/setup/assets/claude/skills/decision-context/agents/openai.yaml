@@ -1,0 +1,4 @@
+interface:
+  display_name: "Decision Context"
+  short_description: "ADR 연결 문서를 제한적으로 읽어 구현 맥락을 만든다"
+  default_prompt: "Use $decision-context to collect bounded context for D01 before implementation."

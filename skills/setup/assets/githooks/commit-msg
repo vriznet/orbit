@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# harness commit-msg 훅 (D10 보조 안전망) — 경고형, 커밋을 막지 않는다.
+# 커밋 메시지에 "Decision:" 트레일러가 있으면, 그 커밋이 {{DOCS_DIR}}/decisions/ 를
+# 변경했는지 확인한다. 없으면 "결정을 선언했는데 ADR이 없다"고 경고한다.
+#
+# 활성화(레포당 1회): git config core.hooksPath .githooks
+# 판단(중요한 결정인지)은 Claude가 하고(D10), 이 훅은 선언↔ADR 일관성만 본다.
+
+msg_file="$1"
+
+# Decision: 트레일러가 없으면 아무 것도 하지 않는다.
+if ! grep -qiE '^Decision:' "$msg_file"; then
+  exit 0
+fi
+
+# 스테이징된 파일 중 {{DOCS_DIR}}/decisions/ 변경이 있는지.
+if git diff --cached --name-only | grep -q '^{{DOCS_DIR}}/decisions/'; then
+  exit 0
+fi
+
+# 경고만 출력하고 커밋은 통과시킨다(exit 0).
+echo "" >&2
+echo "⚠️  harness: 커밋 메시지에 Decision: 트레일러가 있으나 {{DOCS_DIR}}/decisions/ 변경이 없습니다." >&2
+echo "   → 결정을 ADR로 남겼는지 확인하세요. (막지 않고 경고만; 이번 커밋은 그대로 진행)" >&2
+echo "   (ADR을 별도 커밋으로 이미 올렸다면 이 경고는 무시해도 됩니다.)" >&2
+echo "" >&2
+exit 0

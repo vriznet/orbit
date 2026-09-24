@@ -1,0 +1,73 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" recent claude 2>/dev/null || true"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" catchup claude 2>/dev/null || true"],
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/worklog-hook.mjs\" begin"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/wiki-hook.mjs\" post"],
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/wiki-hook.mjs\" stop"],
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/worklog-hook.mjs\" stop"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "{{PROJECT_SLUG}}",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "claude-catchup": "bash scripts/claude-catchup.sh",
+    "codex-catchup": "bash scripts/codex-catchup.sh",
+    "wiki:check": "node scripts/wiki-links.mjs check-all",
+    "wiki:fix": "node scripts/wiki-links.mjs fix",
+    "wiki:context": "node scripts/wiki-context.mjs",
+    "wiki": "node scripts/wiki.mjs"
+  }
+}

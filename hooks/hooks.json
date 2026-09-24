@@ -1,0 +1,17 @@
+{
+  "description": "orbit 에이전트 정책 — 위임 타입을 orbit 접근 모드로 유도한다",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-policy.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
