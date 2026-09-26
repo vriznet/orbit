@@ -8,12 +8,28 @@ import { execFileSync } from 'node:child_process';
 
 export const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 
-export function git(root, args) {
+export function git(root, args, { raw = false } = {}) {
   try {
-    return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const out = execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return raw ? out : out.trim();
   } catch {
     return null;
   }
+}
+
+// 커밋되지 않은 변경 목록. -z로 받아 필드 단위로 읽는다(공백·한글 경로, 이름 바꾸기 안전).
+// 출력을 trim하면 첫 줄 ' M'의 앞 공백이 사라져 경로 첫 글자가 잘리므로 raw로 받는다.
+export function gitStatusEntries(root) {
+  const raw = git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { raw: true });
+  if (!raw) return [];
+  const fields = raw.split('\0').filter(Boolean);
+  const entries = [];
+  for (let index = 0; index < fields.length; index += 1) {
+    const code = fields[index].slice(0, 2);
+    entries.push({ code, path: fields[index].slice(3) });
+    if (code[0] === 'R' || code[0] === 'C') index += 1; // 이름 바꾸기는 옛 경로가 한 칸 더 온다
+  }
+  return entries;
 }
 
 // 워크트리별 상태 폴더(`.git/worktrees/<이름>/orbit-state/...` 또는 `.git/orbit-state/...`).
@@ -209,16 +225,9 @@ export function withLock(lockDir, fn, { timeoutMs = 5000, staleMs = 30000 } = {}
 const SNAPSHOT_MAX_FILES = 500;
 export function gitSnapshot(root) {
   const head = git(root, ['rev-parse', '--verify', '-q', 'HEAD']) || '';
-  const raw = git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
   const dirty = {};
-  if (raw) {
-    const fields = raw.split('\0').filter(Boolean);
-    const paths = [];
-    for (let index = 0; index < fields.length; index += 1) {
-      const code = fields[index].slice(0, 2);
-      paths.push(fields[index].slice(3));
-      if (code[0] === 'R' || code[0] === 'C') index += 1; // 이름 바꾸기는 옛 경로가 한 칸 더 온다
-    }
+  const paths = gitStatusEntries(root).map((entry) => entry.path);
+  if (paths.length) {
     const existing = [];
     for (const rel of paths.slice(0, SNAPSHOT_MAX_FILES)) {
       if (fs.existsSync(path.join(root, rel)) && fs.statSync(path.join(root, rel)).isFile()) existing.push(rel);

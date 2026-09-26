@@ -11,7 +11,8 @@
 //   append ... --session-id <ID> --turn-token <TOKEN>  Claude 훅의 이번 턴 미기록 상태를 완료한다
 //   append ... --session-id <ID> --turn-id <N>          위와 동일하되 구버전 훅과의 호환용(토큰 없을 때)
 //   append ... --commit "<커밋메시지>"  기록 직후 git add -A + 커밋까지 한 번에 (순서 실수 방지)
-//   append ... --why "<판단>" --found "<발견>"  선택 칸. 고른 것·버린 것과 이유·핵심 수치, 이번 턴에 알아낸 것
+//   append ... --decision "<결정 근거>" --found "<발견>"  선택 칸. 결론형으로: 고른 것 / 버린 대안 / 근거 수치,
+//                                         이번 턴에 알아낸 사실. (--why는 같은 칸의 옛 이름으로 계속 받는다)
 //   summary <작성자> "<요약>"           최근 턴들을 하나로 묶어 요약한다 (3턴마다)
 //   found <작성자> <N> "<발견>"         이미 적은 항목 #N에 '- 발견:' 줄을 덧붙인다(종료 훅 알림용, 이미 있으면 거부)
 //   catchup <작성자>                    책갈피 이후 밀린 내용을 보여주고 책갈피를 옮긴다 (없으면 조용)
@@ -463,7 +464,10 @@ const hookSessionId = takeOption('--session-id');
 const hookTurnToken = takeOption('--turn-token');
 const hookTurnId = takeOption('--turn-id');
 const recentMode = takeOption('--mode');
-const whyText = takeOption('--why');
+// 결정 근거 칸: 새 이름 --decision, 옛 이름 --why(0.2.0~0.2.2)도 받는다. 기록 줄 머리는 '- 판단:' 그대로.
+const decisionText = takeOption('--decision');
+const legacyWhyText = takeOption('--why');
+const whyText = decisionText ?? legacyWhyText;
 const foundText = takeOption('--found');
 
 // 기록을 커밋에 포함 → 순서 실수(커밋 먼저, 기록 나중)를 원천 차단

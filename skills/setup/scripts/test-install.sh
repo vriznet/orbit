@@ -1898,6 +1898,84 @@ S64_OUT="$(cd "$R64" && node "$WORK/scenario64.cjs")"; S64_RC=$?
 echo "${S64_OUT}"
 [ "${S64_RC}" = "0" ] || fail "시나리오 64 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 65: git 변경 목록 첫 글자·결정 근거 칸·거절로 끝난 세션의 턴 복구(0.2.3) =="
+R65="$WORK/scenario65"
+new_repo "$R65"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R65" --project-name "Scenario65" --slug scenario65 --mode new >/dev/null 2>&1
+(cd "$R65" && printf '# r\n' > README.md && printf 'x\n' > '공백 한글 파일.md' && git add -A && git -c user.email=t@t -c user.name=t commit -qm init)
+# bash 3.2는 $( ) 안 heredoc의 # 을 주석으로 읽으므로 스크립트를 파일로 먼저 쓴다.
+cat > "$WORK/scenario65.cjs" <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd();
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const run = (script, args, input) => spawnSync(process.execPath, [`scripts/${script}`, ...args], { input: input ? JSON.stringify(input) : undefined, encoding: 'utf8' });
+const LOG = path.join(ROOT, 'scenario65-docs', 'worklog.md');
+const STATE = path.join(ROOT, '.git', 'orbit-state', 'worklog');
+const log = () => (fs.existsSync(LOG) ? fs.readFileSync(LOG, 'utf8') : '');
+
+// 1) 첫 줄이 ' M'으로 시작하는 변경·공백과 한글이 든 경로
+const T = path.join(ROOT, '..', 't65.jsonl');
+fs.writeFileSync(T, JSON.stringify({ type: 'user', message: { role: 'user', content: '진행 중 65' } }) + '\n');
+run('memory-hook.mjs', ['turn-start'], { session_id: 'm65', prompt: '진행 중 65' });
+fs.appendFileSync(path.join(ROOT, 'README.md'), '한 줄 더\n');
+fs.appendFileSync(path.join(ROOT, '공백 한글 파일.md'), 'y\n');
+fs.mkdirSync(path.join(ROOT, '새 폴더'), { recursive: true }); fs.writeFileSync(path.join(ROOT, '새 폴더', '메모 1.txt'), 'z');
+run('memory-hook.mjs', ['precompact'], { session_id: 'm65', transcript_path: T, trigger: 'manual' });
+const state = fs.readFileSync(path.join(ROOT, '.git', 'orbit-state', 'compact', 'm65.md'), 'utf8');
+const changes = state.slice(state.indexOf('## 작업 트리에서'));
+ok(/^- README\.md$/m.test(changes) && !/^- EADME\.md$/m.test(changes), `상태 파일 변경 목록 첫 줄(' M README.md')이 잘리지 않음`);
+ok(/^- 공백 한글 파일\.md$/m.test(changes) && /^- 새 폴더\/메모 1\.txt$/m.test(changes), '공백·한글 경로도 그대로');
+run('memory-hook.mjs', ['stop'], { session_id: 'm65', transcript_path: T, last_assistant_message: '답 65' });
+const rec = fs.readFileSync(path.join(ROOT, '.git', 'orbit-memory', 'dialogue.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).pop();
+ok(rec.files.includes('README.md') && !rec.files.includes('EADME.md') && rec.files.includes('공백 한글 파일.md'), `대화 사본의 바뀐 파일도 첫 글자 그대로(${rec.files.join(', ')})`);
+
+// 2) 결정 근거 칸: 새 이름 --decision, 옛 이름 --why 모두 '- 판단:'
+run('worklog.mjs', ['append', 'claude', 'd1', 'r1', '--decision', 'A를 고름 / B는 느림 / 3.5초']);
+run('worklog.mjs', ['append', 'claude', 'd2', 'r2', '--why', '옛 이름 칸']);
+ok(/^- 판단: A를 고름 \/ B는 느림 \/ 3\.5초$/m.test(log()) && /^- 판단: 옛 이름 칸$/m.test(log()), '--decision·--why 모두 판단 칸으로');
+const guide = fs.readFileSync(path.join(ROOT, 'CLAUDE.md'), 'utf8');
+ok(guide.includes('--decision "고른 것 / 버린 대안 / 근거 수치"') && guide.includes('생각의 흐름·추론 과정은 옮기지 않는다') && !guide.includes('--why'), 'CLAUDE.md 안내는 결론형 --decision');
+
+// 3) 응답이 거절로 끝나 Stop 훅이 돌지 않은 턴 — 새 세션 첫 턴에서 복구
+const transcript = (name, lines, ageMs) => {
+  const file = path.join(ROOT, '..', name);
+  fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const when = new Date(Date.now() - ageMs); fs.utimesSync(file, when, when);
+  return file;
+};
+const refusal = [
+  { type: 'user', message: { role: 'user', content: 'README 고치고 이유 남겨-SECRET65' } },
+  { type: 'assistant', message: { role: 'assistant', stop_reason: 'refusal', content: [{ type: 'text', text: 'API Error: can\'t help with this.' }] } },
+  { type: 'system', subtype: 'model_refusal_no_fallback' },
+];
+const begin = (sid, transcriptPath, promptId) => run('worklog-hook.mjs', ['begin'], { session_id: sid, prompt: `질문-${sid}-SECRET65`, prompt_id: promptId, transcript_path: transcriptPath });
+const ctxOf = (r) => (r.stdout ? JSON.parse(r.stdout).hookSpecificOutput?.additionalContext || '' : '');
+const TA = transcript('ta.jsonl', refusal, 0);
+begin('deadsess1', TA, 'pa');                                                     // 거절로 끝남(아래에서 5분 조용하게)
+begin('freshref1', transcript('tf.jsonl', refusal, 5 * 1000), 'pf');               // 거절 직후(5초) — 아직 복구 안 함
+begin('livesess1', transcript('tl.jsonl', [refusal[0]], 60 * 60 * 1000), 'pl');     // 거절 아님·1시간 조용(권한 대기 등) — 복구 안 함
+const aged = new Date(Date.now() - 5 * 60 * 1000); fs.utimesSync(TA, aged, aged);
+const before = log();
+const r = begin('newsess1', transcript('tn.jsonl', [], 0), 'pn');
+const ctx = ctxOf(r);
+const added = log().slice(before.length);
+ok(/기록 없이 끝난 이전 세션의 턴을 최소 항목으로 복구했습니다: #\d+\(세션 deadsess 턴 #1\)/.test(ctx), `새 세션 첫 턴 안내에 복구 알림`);
+ok(/\(자동 복구 — 세션 deadsess 턴 #1: 응답이 거절·오류로 끝나 기록되지 않은 턴, 원문 미기록\)/.test(added), '복구 항목이 worklog에(원인 표시)');
+ok(!log().includes('SECRET65') && !fs.readdirSync(STATE).some((n) => fs.readFileSync(path.join(STATE, n), 'utf8').includes('SECRET65')), '복구 항목·상태 파일에 프롬프트 원문 없음');
+const st = (sid) => JSON.parse(fs.readFileSync(path.join(STATE, `${sid}.json`), 'utf8'));
+ok(st('deadsess1').pending === null && Number.isFinite(st('deadsess1').entry), '복구된 세션의 미기록 턴이 닫힘');
+ok(st('freshref1').pending && st('livesess1').pending, '막 끝난 거절·거절 아닌 조용한 세션은 건드리지 않음');
+ok(!added.includes('freshref') && !added.includes('livesess'), '다른 세션 항목은 추가 안 됨');
+// 같은 세션에서 이어 보내면 기존처럼 새 턴에 합친다
+const again = ctxOf(begin('freshref1', transcript('tf.jsonl', refusal, 5 * 1000), 'pf2'));
+ok(again.includes('앞 턴(#1)이 기록되지 않은 채 끝나') && again.includes('이 턴에 합쳤습니다'), '같은 세션 다음 입력은 앞 턴을 합침');
+process.exit(failed ? 1 : 0);
+NODE
+S65_OUT="$(cd "$R65" && node "$WORK/scenario65.cjs")"; S65_RC=$?
+echo "${S65_OUT}"
+[ "${S65_RC}" = "0" ] || fail "시나리오 65 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

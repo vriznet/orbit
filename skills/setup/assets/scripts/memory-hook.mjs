@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import {
   WRITE_TOOLS, changedSince, clip, ensurePrivateDir, git, gitSnapshot, isHumanPrompt, isNotification, lastMarks,
   lastTodos, readHookInput, readTranscript, readTranscriptFrom, runningBackgroundTasks, safeName, sharedMemoryDir,
-  dialogueId, localTime, repoRelative, textOf, toolFilePath, toolUses, toolsId, withLock, worktreeStateDir, writePrivateFile,
+  dialogueId, gitStatusEntries, localTime, repoRelative, textOf, toolFilePath, toolUses, toolsId, withLock, worktreeStateDir, writePrivateFile,
 } from './memory-lib.mjs';
 import { redact, redactPrefix } from './redact.mjs';
 
@@ -73,7 +73,7 @@ function buildState(input) {
       if (file && !edited.includes(file)) edited.push(file);
     }
   }
-  const status = (git(ROOT, ['status', '--porcelain']) || '').split('\n').filter(Boolean).map((line) => line.slice(3));
+  const status = gitStatusEntries(ROOT).map((entry) => entry.path);
   let lastAnswer = '';
   for (let index = segment.length - 1; index >= 0 && !lastAnswer; index -= 1) {
     if (segment[index]?.type === 'assistant') lastAnswer = textOf(segment[index]).trim();

@@ -438,7 +438,11 @@ function beginUser(input, state, promptId) {
     ...state,
     sessionId: String(input.session_id || state.sessionId || 'unknown'),
     counter,
-    pending: { turn: counter, token, startedAt: new Date().toISOString(), promptIds: promptId ? [promptId] : [], merged },
+    // transcript: 이 세션이 기록 없이 끝났을 때 다음 세션이 끝난 방식을 보는 데 쓴다(원문은 담지 않는다).
+    pending: {
+      turn: counter, token, startedAt: new Date().toISOString(), promptIds: promptId ? [promptId] : [], merged,
+      transcript: input.transcript_path ? String(input.transcript_path) : null,
+    },
     lastPromptId: promptId,
   };
   writeState(input, next);
@@ -447,6 +451,66 @@ function beginUser(input, state, promptId) {
     : '';
   plan.context = `이번 사용자 턴(#${counter})은 아직 worklog에 기록되지 않았습니다. 최종 답변 전에 다음 형식으로 실제 물음과 결과를 요약해 실행하세요:\n${appendCommand(next.sessionId, token)}${mergedNote}\n명령이 성공하기 전에는 최종 답변을 보내지 않습니다.`;
   return plan;
+}
+
+// ── 기록 없이 끝난 다른 세션의 턴 복구 ───────────────────────────────────────────
+// 응답이 안전 분류기 거절·API 오류로 끝나면 Stop 훅이 돌지 않아 그 턴이 기록되지 않는다.
+// 같은 세션에서 다음 입력을 보내면 beginUser가 새 턴에 합치지만, 새 세션을 열면 옛 세션 상태
+// 파일에 미기록 턴이 남는다. 새 사용자 턴이 시작될 때 같은 워크트리의 다른 세션 상태를 보고,
+// 끝난 것이 분명한 턴만 최소 항목으로 기록한다. 거절 자체를 피하거나 되풀이하지 않는다.
+const ENDED_REFUSAL_IDLE_MS = 60 * 1000; // 거절·오류로 끝난 기록: 1분 넘게 조용하면
+// 그 밖: 세션 기록이 6시간 넘게 조용하면(권한 승인을 기다리는 다른 세션의 턴을 잘못 닫지 않게 길게 둔다.
+// 잘못 닫혀도 그 세션이 나중에 옛 토큰으로 기록하면 항목만 하나 더 생긴다.)
+const ENDED_IDLE_MS = 6 * 60 * 60 * 1000;
+const ENDED_NO_TRANSCRIPT_MS = 6 * 60 * 60 * 1000; // 세션 기록 경로가 없는 옛 상태: 6시간
+
+function transcriptEnding(file) {
+  try {
+    const stat = fs.statSync(file);
+    const size = stat.size;
+    const fd = fs.openSync(file, 'r');
+    const length = Math.min(size, 256 * 1024);
+    const buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, size - length);
+    fs.closeSync(fd);
+    const lines = buffer.toString('utf8').split('\n').filter(Boolean).slice(-40);
+    let refusal = false;
+    for (const line of lines) {
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (entry.type === 'assistant' && entry.message?.stop_reason === 'refusal') refusal = true;
+      if (entry.type === 'system' && /refusal|api_error/i.test(String(entry.subtype || ''))) refusal = true;
+      if (entry.type === 'user' && !entry.isMeta && entry.message?.role === 'user' && typeof entry.message.content === 'string') refusal = false; // 그 뒤 새 입력
+    }
+    return { idle: Date.now() - stat.mtimeMs, refusal };
+  } catch {
+    return null;
+  }
+}
+
+function recoverEndedSessions(input, dir) {
+  const self = `${safeSessionId(input)}.json`;
+  let names;
+  try { names = fs.readdirSync(dir).filter((name) => name.endsWith('.json') && name !== self); } catch { return []; }
+  const recovered = [];
+  for (const name of names) {
+    let state;
+    try { state = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
+    const pending = state?.pending;
+    if (!pending?.token || !state.sessionId) continue;
+    const ending = pending.transcript ? transcriptEnding(pending.transcript) : null;
+    const ended = ending
+      ? (ending.refusal && ending.idle > ENDED_REFUSAL_IDLE_MS) || ending.idle > ENDED_IDLE_MS
+      : Date.now() - Date.parse(pending.startedAt || 0) > ENDED_NO_TRANSCRIPT_MS;
+    if (!ended) continue;
+    const why = ending?.refusal ? '응답이 거절·오류로 끝나' : '기록 전에 세션이 끝나';
+    const ask = `(자동 복구 — 세션 ${String(state.sessionId).slice(0, 8)} 턴 #${pending.turn}: ${why} 기록되지 않은 턴${pendingNote(pending)}, 원문 미기록)`;
+    const result = `다음 세션이 시작될 때 worklog 훅이 최소 항목으로 복구함. 결과 미기록 — 필요하면 세션 ${state.sessionId}의 기록·대화 사본을 본다.`;
+    const run = spawnSync(process.execPath, [WORKLOG, 'append', 'claude', ask, result, '--session-id', state.sessionId, '--turn-token', pending.token], { cwd: ROOT, encoding: 'utf8' });
+    const number = (String(run.stdout).match(/기록됨 \[#(\d+)\]/) || [])[1];
+    if (run.status === 0 && number) recovered.push(`#${number}(세션 ${String(state.sessionId).slice(0, 8)} 턴 #${pending.turn})`);
+  }
+  return recovered;
 }
 
 function handleBegin(input) {
@@ -474,6 +538,11 @@ function handleBegin(input) {
   });
 
   appendNoticeBundle(input, plan.flushNotices);
+  // 새 사용자 턴에서만: 다른 세션이 기록 없이 끝낸 턴을 복구하고 이번 안내에 한 줄 알린다.
+  if (!notices && dir) {
+    const recovered = recoverEndedSessions(input, dir);
+    if (recovered.length && plan.context) plan.context += `\n(참고) 기록 없이 끝난 이전 세션의 턴을 최소 항목으로 복구했습니다: ${recovered.join(', ')}.`;
+  }
   if (plan.context) {
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
