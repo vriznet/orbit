@@ -1210,6 +1210,66 @@ echo "$BLOCK50" | grep -q '^## 기억 저장 기준' && echo "$BLOCK50" | grep -
 LINES50="$(wc -l < "$R50/CLAUDE.md" | tr -d ' ')"
 [ "$LINES50" -le 200 ] && pass "CLAUDE.md 200줄 이하(${LINES50})" || fail "CLAUDE.md가 200줄 초과(${LINES50})"
 
+echo ""
+echo "== 시나리오 51: PreCompact 상태 파일 =="
+R51="$WORK/scenario51"
+new_repo "$R51"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R51" --project-name "Scenario51" --slug scenario51 --mode new >/dev/null 2>&1
+grep -q 'memory-hook.mjs\\" precompact' "$R51/.claude/settings.json" && pass "PreCompact 훅 배선" || fail "PreCompact 배선 없음"
+S51_OUT="$(cd "$R51" && node - <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd(); const T = path.join(ROOT, '..', 'transcript51.jsonl');
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const u = (content, extra = {}) => ({ type: 'user', message: { role: 'user', content }, timestamp: '2026-09-26T00:00:00Z', ...extra });
+const a = (content) => ({ type: 'assistant', message: { role: 'assistant', content } });
+const lines = [
+  u('첫 요청 — 이미 기록됨'),
+  a([{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'node scripts/worklog.mjs append claude "q" "r"' } }]),
+  u([{ type: 'tool_result', tool_use_id: 't1', content: '기록됨 [#1].' }]),
+  u('두 번째 요청 원문: 인증 버그를 고쳐라'),
+  u('스킬 본문 같은 메타 입력', { isMeta: true }),
+  a([{ type: 'tool_use', id: 't2', name: 'Write', input: { file_path: path.join(ROOT, 'src', 'a.js'), content: 'x' } }]),
+  a([{ type: 'tool_use', id: 't3', name: 'Agent', input: { prompt: 'p' } }]),
+  u([{ type: 'tool_result', tool_use_id: 't3', content: 'Async agent launched successfully.\nagentId: abc123 (internal ID)' }]),
+  a([{ type: 'tool_use', id: 't4', name: 'TodoWrite', input: { todos: [{ content: '토큰 검증 고치기', status: 'in_progress' }, { content: '테스트 추가', status: 'pending' }] } }]),
+  u('<task-notification>\n<task-id>other999</task-id>\n<status>completed</status>\n</task-notification>'),
+  a([{ type: 'text', text: '지금 3단계(토큰 검증) 진행 중입니다.' }]),
+];
+fs.writeFileSync(T, lines.map((l) => JSON.stringify(l)).join('\n') + '\n{broken');
+const r = spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'precompact'], { input: JSON.stringify({ session_id: 's51', transcript_path: T, trigger: 'manual', custom_instructions: '인증 버그에 집중' }), encoding: 'utf8' });
+ok(r.status === 0, `precompact 종료 코드 0 (${r.status} ${r.stderr.trim()})`);
+const file = path.join(ROOT, '.git', 'orbit-state', 'compact', 's51.md');
+ok(fs.existsSync(file), '상태 파일 생성');
+const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+ok((fs.statSync(file).mode & 0o777) === 0o600, '상태 파일 권한 600');
+ok(text.includes('두 번째 요청 원문') && !text.includes('첫 요청 — 이미 기록됨'), '마지막 worklog 기록 뒤 입력만');
+ok(!text.includes('메타 입력'), '메타 입력 제외');
+ok(text.includes('src/a.js'), '고친 파일 경로');
+ok(text.includes('abc123'), '완료 알림 없는 백그라운드 작업');
+ok(text.includes('[~] 토큰 검증 고치기') && text.includes('[ ] 테스트 추가'), '할일 목록 상태');
+ok(text.includes('인증 버그에 집중'), '/compact 초점 문구');
+ok(text.includes('3단계(토큰 검증) 진행 중'), '마지막 답변');
+ok(text.length <= 8000, `8,000자 이하(${text.length})`);
+const r2 = spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'precompact'], { input: JSON.stringify({ session_id: 's51b', transcript_path: '/nonexistent/x.jsonl', trigger: 'auto' }), encoding: 'utf8' });
+ok(r2.status === 0, '세션 기록이 없어도 막지 않음');
+// 아직 기록되지 않은 턴(worklog 훅 pending) 안에서 명령 문자열에 든 가짜 기록 글자에 속지 않는다.
+fs.mkdirSync(path.join(ROOT, '.git', 'orbit-state', 'worklog'), { recursive: true });
+fs.writeFileSync(path.join(ROOT, '.git', 'orbit-state', 'worklog', 's51c.json'), JSON.stringify({ sessionId: 's51c', counter: 3, pending: { turn: 3, token: 'x', promptIds: ['pX'], merged: [] }, orphans: [], notices: [] }));
+const T3 = path.join(ROOT, '..', 'transcript51c.jsonl');
+fs.writeFileSync(T3, [
+  u('진행 중 턴의 요청 원문 C', { promptId: 'pX' }),
+  a([{ type: 'tool_use', id: 'f1', name: 'Bash', input: { command: "node -e \"x=['cd /x && node scripts/worklog.mjs append claude a b']\"" } }]),
+  u([{ type: 'tool_result', tool_use_id: 'f1', content: 'ok' }], { promptId: 'pX' }),
+].map((l) => JSON.stringify(l)).join('\n'));
+spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'precompact'], { input: JSON.stringify({ session_id: 's51c', transcript_path: T3, trigger: 'auto' }), encoding: 'utf8' });
+const text3 = fs.readFileSync(path.join(ROOT, '.git', 'orbit-state', 'compact', 's51c.md'), 'utf8');
+ok(text3.includes('진행 중 턴의 요청 원문 C'), '기록 안 된 턴의 입력은 가짜 기록 글자에 속지 않고 포함');
+process.exit(failed ? 1 : 0);
+NODE
+)"; S51_RC=$?
+echo "${S51_OUT}"
+[ "${S51_RC}" = "0" ] || fail "시나리오 51 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

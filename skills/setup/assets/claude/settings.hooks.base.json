@@ -6,7 +6,10 @@
           {
             "type": "command",
             "command": "bash",
-            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" recent claude"],
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" recent claude"
+            ],
             "timeout": 10
           }
         ]
@@ -18,7 +21,10 @@
           {
             "type": "command",
             "command": "bash",
-            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" catchup claude"],
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" catchup claude"
+            ],
             "timeout": 10
           }
         ]
@@ -28,7 +34,10 @@
           {
             "type": "command",
             "command": "bash",
-            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/worklog-hook.mjs\" begin"],
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/worklog-hook.mjs\" begin"
+            ],
             "timeout": 10
           }
         ]
@@ -41,7 +50,10 @@
           {
             "type": "command",
             "command": "bash",
-            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/wiki-hook.mjs\" post"],
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/wiki-hook.mjs\" post"
+            ],
             "timeout": 20
           }
         ]
@@ -53,7 +65,10 @@
           {
             "type": "command",
             "command": "bash",
-            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/wiki-hook.mjs\" stop"],
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/wiki-hook.mjs\" stop"
+            ],
             "timeout": 30
           }
         ]
@@ -63,8 +78,26 @@
           {
             "type": "command",
             "command": "bash",
-            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/worklog-hook.mjs\" stop"],
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/worklog-hook.mjs\" stop"
+            ],
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/memory-hook.mjs\" precompact"
+            ],
+            "timeout": 30
           }
         ]
       }
