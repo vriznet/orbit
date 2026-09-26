@@ -40,3 +40,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## tree-sitter WASM (설치 때 내려받음, 저장소에는 없음)
+
+`/orbit:setup`·`/orbit:update`가 코드 개요·펼치기(`scripts/code.mjs`)를 위해 아래 npm 패키지를 판을 고정해 받고, 필요한 파일만 `~/.cache/orbit/code-tools/<판>/`에 둔다. 각 패키지의 라이선스 파일은 같은 폴더의 `licenses/`에 함께 보관한다.
+
+- `@vscode/tree-sitter-wasm@0.3.1` — MIT, Copyright (c) Microsoft Corporation. https://github.com/microsoft/vscode-tree-sitter-wasm
+  - 포함: tree-sitter 런타임(https://github.com/tree-sitter/tree-sitter, MIT — 패키지의 cgmanifest.json에 기록)과 미리 빌드한 문법 16종(TypeScript·TSX·JavaScript·Python·Go·Rust·Java·Bash·C#·C++·CSS·PHP·Ruby·PowerShell·INI·Regex). 문법별 원 라이선스는 각 tree-sitter 문법 저장소를 따른다.
+- `tree-sitter-json@0.24.8` — MIT, Copyright (c) 2014 Max Brunsfeld. https://github.com/tree-sitter/tree-sitter-json
+
+orbit의 `code.mjs`는 이 런타임을 불러 쓰는 코드를 직접 작성했으며, 다른 프로젝트의 코드를 옮겨 오지 않았다.

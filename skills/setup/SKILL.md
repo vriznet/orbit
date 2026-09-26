@@ -227,6 +227,9 @@ node --check scripts/wiki-links.mjs
 node --check scripts/wiki-context.mjs
 node --check scripts/wiki-hook.mjs
 node --check scripts/wiki.mjs
+node --check scripts/memory-hook.mjs
+node --check scripts/memory.mjs
+node --check scripts/code.mjs
 node scripts/tasks.mjs init
 node scripts/worklog.mjs append claude "하네스 세팅" "orbit:setup으로 설치하고 스모크 테스트"
 node scripts/tasks.mjs list
@@ -234,6 +237,8 @@ npm run wiki:check
 ```
 
 `.claude/settings.json`에서 `worklog-hook.mjs begin`이 `UserPromptSubmit`(SessionStart 아님)에 배선됐는지, PostToolUse·Stop 훅이 함께 남았는지 확인한다. `git config core.hooksPath`가 기존 사용자 훅을 가리키면 설치기는 중단해야 하며 강제로 바꾸지 않는다 — 이때 "프로젝트 설치" 절의 흐름대로 `--no-githooks`를 물어본다.
+
+설치 요약의 `codeTools.status`를 확인한다. `installed`·`present`면 코드 개요가 동작한다. `failed`면 조용히 넘어가지 말고 사용자에게 알린다: 코드 개요·펼치기와 큰 파일 읽기 안내가 동작하지 않는다는 것, 원인(`codeTools.error`), 다시 받는 명령(`node "${CLAUDE_SKILL_DIR}/scripts/install.mjs" code-tools`). 나머지 설치는 정상이다.
 
 `.claude/orbit-manifest.json`은 설치기가 자동으로 생성·갱신하는 소유 기록(파일 해시·설치 모듈 구성)이다. 커밋 대상이며, 손으로 고치거나 지우지 않는다.
 

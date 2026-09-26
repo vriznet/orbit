@@ -51,8 +51,13 @@
 
 | 파일 | 역할 |
 |---|---|
-| `worklog.mjs` | 작업 일지 CLI(append/summary/catchup/recent). Claude↔Codex 협업 기록. `catchup`은 책갈피 기반 Codex 따라잡기(소비), `recent`는 SessionStart에서 최근 요약1+턴8을 주입하는 읽기 전용·비소비 명령. |
-| `worklog-hook.mjs` | 세션·턴 상태 훅. 매 턴 일지 미기록을 감지하고 종료를 막는다(begin/stop). |
+| `worklog.mjs` | 작업 일지 CLI(append/summary/found/catchup/recent). 세션·에이전트 사이 턴 기록. append의 선택 칸 `--why`(판단)·`--found`(발견), 이미 쓴 항목에 발견을 덧붙이는 `found`. `catchup`은 작성자 이름별 책갈피로 따라잡기(소비), `recent`는 최근 8턴과 그 앞 구간 요약을 주입하는 읽기 전용 명령(`--mode compact`면 머리글 '컴팩션 전 기록'). |
+| `worklog-hook.mjs` | 세션·턴 상태 훅. 매 턴 일지 미기록을 감지하고 종료를 막는다(begin/stop). 도구를 많이 쓴 턴에 '발견' 칸이 비면 한 번 알린다. |
+| `memory-hook.mjs` | 기억 훅: precompact(상태 파일), compact-restore(SessionStart compact 주입), postcompact(요약 저장), turn-start(git 지문), stop(대화 글 사본·도구 색인), pre-tool(파일별 기억 목록·큰 파일 개요 안내). |
+| `memory-lib.mjs` | 기억 훅 공용: 세션 기록 파서, 상태 폴더, 잠금, git 지문, 저장소 상대 경로, 기억 번호. |
+| `memory.mjs` | 기억 CLI: `search`(ADR·위키·worklog·대화 사본·도구 활동, 번호 목록), `show <번호>`, `forget <문구> [--apply]`(/forget 스킬이 부름). |
+| `redact.mjs` | 기억 파일에 넣기 전 알려진 모양의 비밀값을 가린다. |
+| `code.mjs` | 코드 개요·펼치기(`outline`/`unfold`). tree-sitter WASM은 설치 때 `~/.cache/orbit/code-tools/`에 받는다. |
 | `tasks.mjs` | GTD 할일 원장 CLI(add/list/review/done/drop/edit). ID는 `T-슬러그-YYMMDD-HHMMSS`. `drop <id> --reason`은 이유가 사라진 할일을 완료와 구분해 취소 아카이브로 보낸다. |
 | `wiki.mjs` | 위키 노트 CRUD(new/list/show/set/rename/rm). |
 | `wiki-lib.mjs` | 위키 공통 라이브러리(파싱·프론트매터 등). |
@@ -67,12 +72,15 @@
 
 | 경로 | 역할 |
 |---|---|
-| `settings.hooks.base.json` | **항상** 설치되는 훅 배선(SessionStart·UserPromptSubmit·PostToolUse·Stop → worklog·wiki 훅). 설치기가 대상 `settings.json`에 병합한다. |
+| `settings.hooks.base.json` | **항상** 설치되는 훅 배선(SessionStart 두 갈래·UserPromptSubmit·PreToolUse·PostToolUse·PreCompact·PostCompact·Stop → worklog·memory·wiki 훅). 설치기가 대상 `settings.json`에 병합한다. |
 | `agents/context-reader.md` | **항상** 설치. ADR 맥락을 제한 범위로 읽어 보고하는 서브에이전트. |
+| `agents/recall-searcher.md` | **항상** 설치. `/recall`이 부르는 기억 검색 서브에이전트(Sonnet 고정, 읽기 전용). |
 | `agents/database-reviewer.md` 외 4개 | **선택(리뷰어)**. 코드 리뷰 전문 에이전트 5종(database·react·security·silent-failure·typescript). |
 | `commands/aside.md`, `checkpoint.md` | **항상** 설치되는 일반 슬래시 명령. |
 | `skills/decision-context/` | **항상** 설치. ADR 기반 제한 맥락 수집 스킬(+`agents/openai.yaml`). |
 | `skills/worktree-merge/SKILL.md` | **항상** 설치. 워크트리 병합 시 원장 충돌 처리 스킬. |
+| `skills/recall/SKILL.md` | **항상** 설치. 옛 결정·이유·대화를 찾는 스킬(사용자·모델 모두 호출). |
+| `skills/forget/SKILL.md` | **항상** 설치. `/forget <문구>`로만 부르는 기억 지우기 스킬(모델 자동 호출 끔). |
 
 ### 3.4 `assets/docs/` — 문서 볼트 스캐폴딩
 
@@ -108,9 +116,9 @@
 
 ## 모듈별 설치 여부 요약
 
-- **항상 설치**: `scripts/`의 원장·위키 도구, `settings.hooks.base`, `context-reader`,
-  `aside`·`checkpoint`, `decision-context`, `worktree-merge`, `docs/` 스캐폴딩,
-  `githooks/commit-msg`.
+- **항상 설치**: `scripts/`의 원장·위키·기억·코드 도구, `settings.hooks.base`, `context-reader`·`recall-searcher`,
+  `aside`·`checkpoint`, `decision-context`, `worktree-merge`, `recall`, `forget`, `docs/` 스캐폴딩,
+  `githooks/commit-msg`. 코드 도구(tree-sitter WASM)는 저장소 밖 `~/.cache/orbit/code-tools/`에 받는다.
 - **선택 — Codex**: `AGENTS.md`, `codex-catchup.sh`.
 - **선택 — 리뷰어**: `agents/`의 리뷰어 5종.
 

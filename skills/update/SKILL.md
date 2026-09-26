@@ -13,7 +13,7 @@ orbit:setup의 `install.mjs update`에 있고, 이 스킬은 그것을 호출해
 - 대상 저장소에 `.claude/orbit-manifest.json`이 있어야 한다(orbit:setup으로 먼저 설치).
   없으면 "먼저 orbit:setup으로 설치하세요"라고 안내하고 멈춘다.
 - 설치기가 있는 orbit:setup 스킬이 같은 플러그인의 형제 디렉터리(`../orbit:setup`)에 있어야 한다.
-- git과 Node.js 18 이상이 있어야 한다. 없으면 orbit:setup의 "필수 도구 확인" 절대로 설치를
+- git과 Node.js 18 이상(npm 포함)이 있어야 한다. 코드 도구를 처음 받을 때는 네트워크가 필요하다. 없으면 orbit:setup의 "필수 도구 확인" 절대로 설치를
   안내하고, 사용자가 설치를 거부하면 갱신하지 않고 멈춘다.
 
 ## 절차
@@ -30,6 +30,7 @@ orbit:setup의 `install.mjs update`에 있고, 이 스킬은 그것을 호출해
    - `files.conflict`: **사용자가 직접 수정해 보존된 파일**이다(어느 파일인지 `conflicts`
      목록으로 알려준다). 이건 실패가 아니라 **의도된 보존**이다.
    - `merges.settingsJson` 등이 `update`면 훅·설정이 바뀌었다고 알린다.
+   - `codeTools.status`가 `failed`면 조용히 넘기지 않는다: 코드 개요·펼치기가 동작하지 않는다는 것, 원인(`codeTools.error`), 다시 받는 명령(`node "${CLAUDE_SKILL_DIR}/../setup/scripts/install.mjs" code-tools`)을 알린다. 나머지 갱신은 정상이다.
 4. 훅·설정이 바뀌었으면 "새 세션(재시작)부터 적용된다"고 덧붙인다.
 
 ## 원칙
