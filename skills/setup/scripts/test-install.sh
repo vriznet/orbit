@@ -1689,6 +1689,23 @@ NODE
 echo "${S59_OUT}"
 [ "${S59_RC}" = "0" ] || fail "시나리오 59 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 60: recall 스킬과 recall-searcher 에이전트 =="
+R60="$WORK/scenario60"; R60R="$WORK/scenario60r"
+new_repo "$R60"; new_repo "$R60R"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R60" --project-name "Scenario60" --slug scenario60 --mode new >/dev/null 2>&1
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R60R" --project-name "Scenario60R" --slug scenario60r --mode new --reviewers >/dev/null 2>&1
+SK60="$R60/.claude/skills/recall/SKILL.md"; AG60="$R60/.claude/agents/recall-searcher.md"
+[ -f "$SK60" ] && grep -q '^name: recall$' "$SK60" && ! grep -q 'disable-model-invocation' "$SK60" && grep -q '\$ARGUMENTS' "$SK60" && grep -q 'recall-searcher' "$SK60" && pass "recall 스킬(사용자·모델 모두 호출, 에이전트 위임)" || fail "recall 스킬 설정 오류"
+[ -f "$AG60" ] && grep -q '^model: sonnet$' "$AG60" && grep -q '^  - Bash$' "$AG60" && sed -n '/^disallowedTools:/,/^model:/p' "$AG60" | grep -q '  - Write' && sed -n '/^disallowedTools:/,/^model:/p' "$AG60" | grep -q '  - Agent' && pass "recall-searcher: Sonnet 고정·읽기 전용" || fail "recall-searcher 설정 오류"
+AGS60="$(ls "$R60/.claude/agents" | tr '\n' ' ')"
+[ "$AGS60" = "context-reader.md recall-searcher.md " ] && pass "리뷰어 없이 설치: 기본 에이전트 2개만(${AGS60})" || fail "기본 에이전트 목록 이상(${AGS60})"
+[ -f "$R60R/.claude/agents/recall-searcher.md" ] && [ "$(ls "$R60R/.claude/agents" | wc -l | tr -d ' ')" = "7" ] && pass "리뷰어 설치에도 recall-searcher 1개(리뷰어 5 + 기본 2)" || fail "리뷰어 설치 에이전트 수 이상($(ls "$R60R/.claude/agents" | wc -l))"
+grep -q '`recall` 스킬' "$R60/CLAUDE.md" && pass "CLAUDE.md가 recall을 안내" || fail "CLAUDE.md recall 안내 없음"
+J60='{"tool_name":"Agent","cwd":"'"$R60"'","tool_input":{"subagent_type":"recall-searcher"}}'
+P60="$(printf '%s' "$J60" | env -u CLAUDE_PROJECT_DIR node "$SKILL_DIR/../../hooks/agent-policy.mjs" 2>/dev/null)"
+[ -z "$P60" ] && pass "정책 훅이 recall-searcher 위임을 막지 않음" || fail "정책 훅이 recall-searcher를 거부"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

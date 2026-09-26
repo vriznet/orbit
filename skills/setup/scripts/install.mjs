@@ -512,14 +512,16 @@ addAssetTree('docs', docsRoot, 'legacy/docs', true);
 addAssetTree('claude/skills/decision-context', path.join(repo, '.claude/skills/decision-context'));
 addAssetTree('claude/skills/worktree-merge', path.join(repo, '.claude/skills/worktree-merge'));
 addAssetTree('claude/skills/forget', path.join(repo, '.claude/skills/forget'));
-addFile(
-  path.join(ASSETS, 'claude/agents/context-reader.md'),
-  path.join(repo, '.claude/agents/context-reader.md'),
-);
+addAssetTree('claude/skills/recall', path.join(repo, '.claude/skills/recall'));
+// 항상 설치하는 에이전트. 리뷰어(선택 모듈) 반복에서는 뺀다.
+const ALWAYS_AGENTS = ['context-reader.md', 'recall-searcher.md'];
+for (const name of ALWAYS_AGENTS) {
+  addFile(path.join(ASSETS, 'claude/agents', name), path.join(repo, '.claude/agents', name));
+}
 
 if (options.reviewers) {
   for (const source of walkFiles(path.join(ASSETS, 'claude/agents'))) {
-    if (path.basename(source) === 'context-reader.md') continue;
+    if (ALWAYS_AGENTS.includes(path.basename(source))) continue;
     addFile(source, path.join(repo, '.claude/agents', path.basename(source)));
   }
 }
