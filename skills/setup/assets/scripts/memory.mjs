@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { clip, dialogueId, git, sharedMemoryDir, toolsId, withLock, writePrivateFile } from './memory-lib.mjs';
+import { clip, dialogueId, git, localTime, sharedMemoryDir, toolsId, withLock, writePrivateFile } from './memory-lib.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DOCS = path.join(ROOT, '{{DOCS_DIR}}');
@@ -69,7 +69,9 @@ function searchAdr(words) {
     return {
       source: 'adr',
       score: score(text, words),
-      superseded: /대체됨/.test(head),
+      // '⚠️ …으로 대체됨'은 전체 대체, '⚠️ …으로 일부 대체됨'만 있으면 여전히 유효한 결정이다.
+      superseded: head.split('\n').some((line) => /대체됨/.test(line) && !/일부\s*대체됨/.test(line)),
+      partlySuperseded: /일부\s*대체됨/.test(head),
       time: stampFromName(path.basename(file)) ?? fs.statSync(file).mtimeMs,
       ref: path.relative(ROOT, file),
       title: (text.match(/^#\s+(.+)$/m) || [])[1] || path.basename(file),
@@ -173,7 +175,7 @@ function rank(items) {
 // 번호 체계: worklog `#N`(요약은 `#a~b`), 대화 사본 `d:<세션 앞 8자>:<턴>`, 도구 색인 `t:<세션 앞 8자>:<턴>`,
 // ADR·위키는 파일 경로. 검색은 번호 + 한 줄 발췌만 보여 주고, 상세는 `show <번호>`로 본다
 // (목록 먼저, 필요한 것만 상세 — 토큰을 아낀다).
-const when = (at) => String(at || '').slice(0, 16).replace('T', ' ');
+const when = (at) => localTime(at);
 const oneLine = (text, limit) => clip(String(text || '').replace(/\s+/g, ' ').trim(), limit);
 
 function toolLine(r) {
@@ -183,14 +185,14 @@ function toolLine(r) {
 function formatItem(item, total) {
   const mark = `[${item.score}/${total}]`;
   if (item.source === 'adr' || item.source === 'wiki') {
-    const flag = item.superseded ? ' (대체됨 — 참고만)' : '';
+    const flag = item.superseded ? ' (대체됨 — 참고만)' : item.partlySuperseded ? ' (일부 대체됨 — 대체한 결정도 확인)' : '';
     const line = item.lines[0] ? `\n    > ${item.lines[0]}` : '';
     return `- ${mark} ${item.ref} — ${oneLine(item.title, 120)}${flag}${line}`;
   }
   if (item.source === 'worklog') {
     const ask = (item.text.match(/^- 물음: (.*)$/m) || [])[1] || item.text.split('\n')[1] || '';
     const date = (item.text.match(/\] (\d{4}-\d{2}-\d{2})/) || [])[1] || '';
-    return `- ${mark} #${item.ref.replace(/^요약 #/, '')} · ${date} · ${oneLine(ask, 150)}`;
+    return `- ${mark} #${item.ref.replace(/^(요약 )?#/, '')} · ${date} · ${oneLine(ask, 150)}`;
   }
   if (item.source === 'tools') {
     const first = item.records[0];
@@ -241,7 +243,7 @@ function formatDialogue(record, label) {
 }
 
 function showItem(id, { around = false } = {}) {
-  let match = id.match(/^#(\d+(?:~\d+)?)$/);
+  let match = id.match(/^##?(\d+(?:~\d+)?)$/); // 0.2.0 검색 목록의 '##N'도 받는다
   if (match) return showWorklog(match[1]) || `${id}: worklog에 그 항목이 없습니다.`;
   match = id.match(/^([dt]):([^:]+):(\d+)$/);
   if (match) {

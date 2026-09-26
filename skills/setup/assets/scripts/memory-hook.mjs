@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import {
   WRITE_TOOLS, changedSince, clip, ensurePrivateDir, git, gitSnapshot, isHumanPrompt, isNotification, lastMarks,
   lastTodos, readHookInput, readTranscript, readTranscriptFrom, runningBackgroundTasks, safeName, sharedMemoryDir,
-  dialogueId, repoRelative, textOf, toolFilePath, toolUses, toolsId, withLock, worktreeStateDir, writePrivateFile,
+  dialogueId, localTime, repoRelative, textOf, toolFilePath, toolUses, toolsId, withLock, worktreeStateDir, writePrivateFile,
 } from './memory-lib.mjs';
 import { redact, redactPrefix } from './redact.mjs';
 
@@ -83,7 +83,7 @@ function buildState(input) {
 
   const lines = [
     '# 컴팩션 전 상태 (orbit 상태 파일 — 세션 기록에서 기계로 뽑은 원문 조각)',
-    `- 시각: ${new Date().toISOString()} · 계기: ${input.trigger || '알 수 없음'}`,
+    `- 시각: ${localTime(new Date(), { offset: true })} · 계기: ${input.trigger || '알 수 없음'}`,
   ];
   if (input.custom_instructions) lines.push(`- /compact 초점 문구: ${clip(input.custom_instructions, 500)}`);
   lines.push('', `## 마지막 worklog 기록 뒤 사용자 입력 (원문, 오래된 순${notices ? ` · 백그라운드 알림 ${notices}건 제외` : ''})`);
@@ -165,7 +165,7 @@ function postcompact(input) {
   if (!summary || !dir) return;
   const prefix = `${safeName(input.session_id)}-summary-`;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  writePrivateFile(path.join(dir, `${prefix}${stamp}.md`), `# 컴팩션 요약 (${input.trigger || '알 수 없음'}, ${new Date().toISOString()})\n\n${redact(summary)}\n`);
+  writePrivateFile(path.join(dir, `${prefix}${stamp}.md`), `# 컴팩션 요약 (${input.trigger || '알 수 없음'}, ${localTime(new Date(), { offset: true })})\n\n${redact(summary)}\n`);
 }
 
 // ── 대화 글 사본 ──────────────────────────────────────────────────────────────
@@ -353,7 +353,7 @@ function fileMemory(rel) {
       ? asks.get(r.worklog)
       : (dialogue.get(dialogueId(r))?.user || '');
     const ids = [r.worklog ? `#${r.worklog}` : '', dialogue.has(dialogueId(r)) ? dialogueId(r) : '', toolsId(r)].filter(Boolean).join(' ');
-    lines.push(`- ${String(turn.at || '').slice(0, 10)} · ${ids} · ${[...turn.tools].join('/')} · ${clip(String(said).replace(/\s+/g, ' ').trim() || '(글 없음)', 110)}`);
+    lines.push(`- ${localTime(turn.at, { date: true })} · ${ids} · ${[...turn.tools].join('/')} · ${clip(String(said).replace(/\s+/g, ' ').trim() || '(글 없음)', 110)}`);
   }
   lines.push('상세: node scripts/memory.mjs show <번호>');
   const text = lines.join('\n');

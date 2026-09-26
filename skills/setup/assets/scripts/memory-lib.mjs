@@ -168,6 +168,18 @@ export function lastTodos(entries) {
   return null;
 }
 
+// 저장은 ISO(UTC) 그대로 두고, 사람이 읽는 곳에서만 이 컴퓨터의 현지 시각 'YYYY-MM-DD HH:MM'으로 보인다.
+export function localTime(at, { date = false, offset = false } = {}) {
+  const d = at instanceof Date ? at : new Date(String(at || ''));
+  if (Number.isNaN(d.getTime())) return String(at || '').slice(0, date ? 10 : 16).replace('T', ' ');
+  const pad = (n) => String(Math.abs(n)).padStart(2, '0');
+  const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  if (date) return day;
+  const minutes = -d.getTimezoneOffset();
+  const zone = offset ? ` (UTC${minutes < 0 ? '-' : '+'}${pad(Math.trunc(minutes / 60))}:${pad(minutes % 60)})` : '';
+  return `${day} ${pad(d.getHours())}:${pad(d.getMinutes())}${zone}`;
+}
+
 export function clip(text, limit) {
   const value = String(text ?? '');
   return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;

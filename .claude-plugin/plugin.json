@@ -1,6 +1,6 @@
 {
   "name": "orbit",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Project harness for AI-assisted work: per-repo memory ledgers, enforcement hooks, and clean subagent delegation. 한 저장소에 기억·규율·위임을 심는 프로젝트 하네스.",
   "author": {
     "name": "vriznet",

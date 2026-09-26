@@ -1789,6 +1789,51 @@ echo "${S62_OUT}"
 [ "${S62_RC}" = "0" ] || fail "시나리오 62 하위 항목 실패(위 ❌ 확인)"
 fi
 
+echo ""
+echo "== 시나리오 63: 검색 번호(#N)·현지 시각 표시·일부 대체 ADR(0.2.1) =="
+R63="$WORK/scenario63"
+new_repo "$R63"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R63" --project-name "Scenario63" --slug scenario63 --mode new >/dev/null 2>&1
+# bash 3.2는 $( ) 안 heredoc의 # 을 주석으로 읽으므로 스크립트를 파일로 먼저 쓴다.
+cat > "$WORK/scenario63.cjs" <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd(); const D = 'scenario63-docs';
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const put = (rel, text) => { fs.mkdirSync(path.dirname(rel), { recursive: true }); fs.writeFileSync(rel, text); };
+put(`${D}/decisions/D-부분-260101-000000.md`, '# D-부분 — 저장은 파일로\n\n> ⚠️ [[decisions/D-다른-260201-000000]]으로 일부 대체됨(도구 규칙만)\n\n- 상태: 확정\n\n저장 방식 결정.\n');
+put(`${D}/decisions/D-전체-260101-000001.md`, '# D-전체 — 저장은 DB로\n\n> ⚠️ [[decisions/D-다른-260201-000000]]으로 대체됨\n\n- 상태: 확정\n\n저장 방식 결정.\n');
+for (let i = 1; i <= 3; i += 1) spawnSync(process.execPath, ['scripts/worklog.mjs', 'append', 'claude', `저장 방식 ${i}`, '결과']);
+const mem = path.join('.git', 'orbit-memory'); fs.mkdirSync(mem, { recursive: true });
+fs.writeFileSync(path.join(mem, 'dialogue.jsonl'), JSON.stringify({ v: 1, at: '2026-09-26T05:56:00.000Z', session: 'sessT', worktree: ROOT, seq: 1, user: '저장 방식 물음', assistant: '답' }) + '\n');
+fs.writeFileSync(path.join(mem, 'tools.jsonl'), JSON.stringify({ v: 1, at: '2026-09-25T20:30:00.000Z', session: 'sessT', seq: 1, tool: 'Edit', file: 'src/store.js', worklog: null, worktree: ROOT }) + '\n');
+const mm = (...args) => spawnSync(process.execPath, ['scripts/memory.mjs', ...args], { encoding: 'utf8' }).stdout;
+const out = mm('search', '저장 방식');
+ok(/- \[\d\/\d\] #3 · /.test(out) && !/##\d/.test(out), `worklog 번호는 #N 한 번(${(out.match(/#+3 ·/) || [''])[0]})`);
+ok(mm('show', '##3').includes('저장 방식 3') && mm('show', '#3').includes('저장 방식 3'), "show는 '#N'과 옛 '##N' 모두 받음");
+ok(out.includes('2026-09-26 14:56') && !out.includes('2026-09-26 05:56'), '검색 목록 시각은 현지(UTC 05:56 → 서울 14:56)');
+ok(mm('show', 'd:sessT:1').includes('2026-09-26 14:56'), 'show 대화 사본도 현지 시각');
+ok(mm('show', 't:sessT:1').includes('2026-09-26 05:30'), 'show 도구 활동도 현지 시각(날짜가 바뀌는 경우)');
+const adr = out.slice(out.indexOf('## ADR'), out.indexOf('## worklog'));
+const line = (name) => adr.split('\n').find((l) => l.includes(name)) || '';
+ok(line('D-부분').includes('일부 대체됨') && !line('D-부분').includes('참고만'), "'일부 대체됨' ADR은 참고만으로 내리지 않음");
+ok(line('D-전체').includes('대체됨 — 참고만') && adr.indexOf('D-부분') < adr.indexOf('D-전체'), '전체 대체 ADR은 참고만·뒤로');
+const pre = spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'pre-tool'], { input: JSON.stringify({ session_id: 'now63', tool_name: 'Read', tool_input: { file_path: path.join(ROOT, 'src/store.js') } }), encoding: 'utf8' });
+const ctx = pre.stdout ? JSON.parse(pre.stdout).hookSpecificOutput?.additionalContext || '' : '';
+ok(ctx.includes('- 2026-09-26 · '), `파일별 기억 목록 날짜도 현지(${(ctx.match(/- \d{4}-\d{2}-\d{2}/) || [''])[0]})`);
+const T = path.join(ROOT, '..', 't63.jsonl');
+fs.writeFileSync(T, JSON.stringify({ type: 'user', message: { role: 'user', content: '진행 중 63' } }) + '\n');
+spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'precompact'], { input: JSON.stringify({ session_id: 's63', transcript_path: T, trigger: 'manual' }), encoding: 'utf8' });
+const state = fs.readFileSync(path.join('.git', 'orbit-state', 'compact', 's63.md'), 'utf8');
+ok(/- 시각: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \(UTC\+09:00\)/.test(state), '컴팩션 상태 파일 시각은 현지+시간대');
+spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'postcompact'], { input: JSON.stringify({ session_id: 's63', trigger: 'manual', compact_summary: '요약 63' }), encoding: 'utf8' });
+const sum = fs.readdirSync(path.join('.git', 'orbit-state', 'compact')).find((n) => n.startsWith('s63-summary-'));
+ok(sum && /\(UTC\+09:00\)\)/.test(fs.readFileSync(path.join('.git', 'orbit-state', 'compact', sum), 'utf8').split('\n')[0]), '컴팩션 요약 머리글도 현지+시간대');
+process.exit(failed ? 1 : 0);
+NODE
+S63_OUT="$(cd "$R63" && TZ=Asia/Seoul node "$WORK/scenario63.cjs")"; S63_RC=$?
+echo "${S63_OUT}"
+[ "${S63_RC}" = "0" ] || fail "시나리오 63 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0
