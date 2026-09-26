@@ -1,6 +1,6 @@
 ---
 name: recall-searcher
-description: /recall 스킬이 부르는 기억 검색 전용 서브에이전트. 이 프로젝트의 지난 결정·이유·대화를 ADR·위키·worklog·대화 글 사본·도구 색인에서 뜻으로 찾아, 답과 출처 목록만 돌려준다. 파일을 고치지 않는다.
+description: recall 스킬이 부르는 기억 검색 전용 서브에이전트. 이 프로젝트의 지난 결정·이유·대화를 ADR·위키·worklog·대화 글 사본·도구 색인에서 뜻으로 찾아, 답과 출처 목록만 돌려준다. 파일을 고치지 않는다.
 tools:
   - Bash
   - Read

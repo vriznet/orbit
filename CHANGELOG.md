@@ -1,5 +1,13 @@
 # 변경 내역
 
+## 0.2.4 — 2026-09-26
+
+- 스킬 `recall`·`forget`·`decision-context`·`worktree-merge`를 저장소 사본에서 **플러그인 스킬**로 옮겼다. 이제 `/orbit:recall`, `/orbit:forget`, `/orbit:decision-context`, `/orbit:worktree-merge`로 부른다. 스킬은 저장소의 `.claude/orbit-manifest.json`(`docsDir`)과 `scripts/`를 쓰고, orbit이 없는 저장소에서는 멈춘다.
+- `/aside`·`/checkpoint` 명령을 뺐다(ECC에서 가져온 파일이라 고지에서도 뺐다).
+- update가 더 설치하지 않는 옛 산출물을 정리한다: 매니페스트에 기록된 사본이 설치 그대로면 지우고(빈 폴더 포함), 사용자가 고쳤으면 남긴 채 요약 `retired.kept`로 알린다. 사용자가 직접 만든 다른 스킬·명령은 건드리지 않는다.
+- CLAUDE.md 안내가 플러그인 이름공간(`orbit:recall`, `/orbit:forget`)을 쓴다.
+- 회귀 시나리오 66.
+
 ## 0.2.3 — 2026-09-26
 
 - 컴팩션 상태 파일의 "커밋되지 않은 변경" 목록과 대화 사본의 "바뀐 파일"에서 첫 경로의 첫 글자가 잘리던 문제(`README.md` → `EADME.md`)를 고쳤다. git 출력을 trim하면서 첫 줄 ` M`의 앞 공백이 사라진 탓이다. 상태 목록은 `--porcelain=v1 -z`를 그대로 받아 필드 단위로 읽는다(공백·한글 경로, 이름 바꾸기 안전).

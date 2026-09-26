@@ -1509,9 +1509,9 @@ echo "== 시나리오 56: /forget 스킬과 memory.mjs forget =="
 R56="$WORK/scenario56"
 new_repo "$R56"
 node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R56" --project-name "Scenario56" --slug scenario56 --mode new >/dev/null 2>&1
-SK56="$R56/.claude/skills/forget/SKILL.md"
-[ -f "$SK56" ] && grep -q '^disable-model-invocation: true' "$SK56" && grep -q '^argument-hint:' "$SK56" && grep -q '\$ARGUMENTS' "$SK56" && pass "/forget 스킬 설치(모델 자동 호출 끔·인자)" || fail "/forget 스킬 설정 오류"
-grep -q '/forget <문구>' "$R56/CLAUDE.md" && pass "CLAUDE.md가 /forget을 안내" || fail "CLAUDE.md /forget 안내 없음"
+SK56="$SKILL_DIR/../forget/SKILL.md"
+[ -f "$SK56" ] && grep -q '^disable-model-invocation: true' "$SK56" && grep -q '^argument-hint:' "$SK56" && grep -q '\$ARGUMENTS' "$SK56" && pass "forget 플러그인 스킬(모델 자동 호출 끔·인자)" || fail "forget 스킬 설정 오류"
+grep -q '/orbit:forget <문구>' "$R56/CLAUDE.md" && pass "CLAUDE.md가 /orbit:forget을 안내" || fail "CLAUDE.md /forget 안내 없음"
 (cd "$R56" && git add -A && git -c user.email=t@t -c user.name=t commit -qm init)
 S56_OUT="$(cd "$R56" && node - <<'NODE'
 const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
@@ -1699,13 +1699,13 @@ R60="$WORK/scenario60"; R60R="$WORK/scenario60r"
 new_repo "$R60"; new_repo "$R60R"
 node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R60" --project-name "Scenario60" --slug scenario60 --mode new >/dev/null 2>&1
 node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R60R" --project-name "Scenario60R" --slug scenario60r --mode new --reviewers >/dev/null 2>&1
-SK60="$R60/.claude/skills/recall/SKILL.md"; AG60="$R60/.claude/agents/recall-searcher.md"
+SK60="$SKILL_DIR/../recall/SKILL.md"; AG60="$R60/.claude/agents/recall-searcher.md"
 [ -f "$SK60" ] && grep -q '^name: recall$' "$SK60" && ! grep -q 'disable-model-invocation' "$SK60" && grep -q '\$ARGUMENTS' "$SK60" && grep -q 'recall-searcher' "$SK60" && pass "recall 스킬(사용자·모델 모두 호출, 에이전트 위임)" || fail "recall 스킬 설정 오류"
 [ -f "$AG60" ] && grep -q '^model: sonnet$' "$AG60" && grep -q '^  - Bash$' "$AG60" && sed -n '/^disallowedTools:/,/^model:/p' "$AG60" | grep -q '  - Write' && sed -n '/^disallowedTools:/,/^model:/p' "$AG60" | grep -q '  - Agent' && pass "recall-searcher: Sonnet 고정·읽기 전용" || fail "recall-searcher 설정 오류"
 AGS60="$(ls "$R60/.claude/agents" | tr '\n' ' ')"
 [ "$AGS60" = "context-reader.md recall-searcher.md " ] && pass "리뷰어 없이 설치: 기본 에이전트 2개만(${AGS60})" || fail "기본 에이전트 목록 이상(${AGS60})"
 [ -f "$R60R/.claude/agents/recall-searcher.md" ] && [ "$(ls "$R60R/.claude/agents" | wc -l | tr -d ' ')" = "7" ] && pass "리뷰어 설치에도 recall-searcher 1개(리뷰어 5 + 기본 2)" || fail "리뷰어 설치 에이전트 수 이상($(ls "$R60R/.claude/agents" | wc -l))"
-grep -q '`recall` 스킬' "$R60/CLAUDE.md" && pass "CLAUDE.md가 recall을 안내" || fail "CLAUDE.md recall 안내 없음"
+grep -q '`orbit:recall` 스킬' "$R60/CLAUDE.md" && pass "CLAUDE.md가 recall을 안내" || fail "CLAUDE.md recall 안내 없음"
 J60='{"tool_name":"Agent","cwd":"'"$R60"'","tool_input":{"subagent_type":"recall-searcher"}}'
 P60="$(printf '%s' "$J60" | env -u CLAUDE_PROJECT_DIR node "$SKILL_DIR/../../hooks/agent-policy.mjs" 2>/dev/null)"
 [ -z "$P60" ] && pass "정책 훅이 recall-searcher 위임을 막지 않음" || fail "정책 훅이 recall-searcher를 거부"
@@ -1975,6 +1975,63 @@ NODE
 S65_OUT="$(cd "$R65" && node "$WORK/scenario65.cjs")"; S65_RC=$?
 echo "${S65_OUT}"
 [ "${S65_RC}" = "0" ] || fail "시나리오 65 하위 항목 실패(위 ❌ 확인)"
+
+echo ""
+echo "== 시나리오 66: 스킬 4개는 플러그인 이름공간으로, /aside·/checkpoint 제거, 옛 사본 정리(0.2.4) =="
+R66="$WORK/scenario66"
+new_repo "$R66"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R66" --project-name "Scenario66" --slug scenario66 --mode new >/dev/null 2>&1
+# bash 3.2는 $( ) 안 heredoc의 # 을 주석으로 읽으므로 스크립트를 파일로 먼저 쓴다.
+cat > "$WORK/scenario66.cjs" <<'NODE'
+const fs = require('fs'); const path = require('path'); const crypto = require('crypto'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd(); const PLUGIN = process.env.PLUGIN_ROOT; const INSTALL = path.join(PLUGIN, 'skills', 'setup', 'scripts', 'install.mjs');
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const exists = (rel) => fs.existsSync(path.join(ROOT, rel));
+const MANIFEST = path.join(ROOT, '.claude', 'orbit-manifest.json');
+const manifest = () => JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
+const pluginName = JSON.parse(fs.readFileSync(path.join(PLUGIN, '.claude-plugin', 'plugin.json'), 'utf8')).name;
+const SKILLS = ['recall', 'forget', 'decision-context', 'worktree-merge'];
+
+// 1) 새 설치: 저장소에 스킬 사본·명령이 없고, 플러그인에 스킬이 있다
+ok(SKILLS.every((s) => !exists(`.claude/skills/${s}`)) && !exists('.claude/commands/aside.md') && !exists('.claude/commands/checkpoint.md'), '새 설치는 저장소에 스킬 4개·aside·checkpoint를 넣지 않음');
+ok(!Object.keys(manifest().files).some((k) => k.startsWith('.claude/skills/') || k.startsWith('.claude/commands/')), '매니페스트에도 기록 없음');
+const texts = SKILLS.map((s) => fs.readFileSync(path.join(PLUGIN, 'skills', s, 'SKILL.md'), 'utf8'));
+ok(texts.every((t) => !t.includes('{{') && t.includes('.claude/orbit-manifest.json')), '플러그인 스킬 4개: 템플릿 변수 없음·orbit 없는 저장소에서 멈춤');
+ok(texts.every((t) => !/[^:a-z-]\/(recall|forget|decision-context|worktree-merge)\b/.test(t)) && texts.some((t) => t.includes(`/${pluginName}:forget`)), `스킬 안의 호출 이름은 /${pluginName}:… 형태`);
+ok(!fs.existsSync(path.join(PLUGIN, 'skills', 'setup', 'assets', 'claude', 'commands')), '플러그인에 aside·checkpoint 명령 파일 없음');
+const claude = fs.readFileSync(path.join(ROOT, 'CLAUDE.md'), 'utf8');
+ok(claude.includes(`\`${pluginName}:recall\` 스킬`) && claude.includes(`/${pluginName}:forget <문구>`), `CLAUDE.md 안내가 ${pluginName}: 이름공간`);
+
+// 2) 0.2.3 설치본 흉내: 옛 사본을 만들고 매니페스트에 설치 기록을 남긴다(하나는 사용자가 고침)
+const old = {
+  '.claude/skills/recall/SKILL.md': '옛 recall\n', '.claude/skills/forget/SKILL.md': '옛 forget\n',
+  '.claude/skills/decision-context/SKILL.md': '옛 dc\n', '.claude/skills/decision-context/agents/openai.yaml': 'interface: {}\n',
+  '.claude/skills/worktree-merge/SKILL.md': '옛 wm\n', '.claude/commands/aside.md': '옛 aside\n', '.claude/commands/checkpoint.md': '옛 checkpoint\n',
+};
+const m = manifest();
+for (const [rel, text] of Object.entries(old)) {
+  fs.mkdirSync(path.dirname(path.join(ROOT, rel)), { recursive: true }); fs.writeFileSync(path.join(ROOT, rel), text);
+  m.files[rel] = `sha256:${crypto.createHash('sha256').update(text).digest('hex')}`;
+}
+fs.writeFileSync(MANIFEST, JSON.stringify(m, null, 2));
+fs.appendFileSync(path.join(ROOT, '.claude/skills/recall/SKILL.md'), '사용자가 더한 줄\n');       // 고친 사본
+fs.mkdirSync(path.join(ROOT, '.claude/skills/my-skill'), { recursive: true }); fs.writeFileSync(path.join(ROOT, '.claude/skills/my-skill/SKILL.md'), '내 스킬\n');
+fs.writeFileSync(path.join(ROOT, '.claude/commands/mine.md'), '내 명령\n');
+const run = spawnSync(process.execPath, [INSTALL, 'update', '--repo', ROOT], { encoding: 'utf8', env: { ...process.env, ORBIT_CODE_TOOLS: 'skip' } });
+const summary = JSON.parse(run.stdout || '{}');
+ok(run.status === 0, `update 성공(${run.status} ${String(run.stderr).trim().slice(0, 120)})`);
+ok(summary.retired?.removed.length === 6 && summary.retired.kept.join() === '.claude/skills/recall/SKILL.md', `설치 그대로인 6개 지움·고친 recall은 남김(${JSON.stringify(summary.retired)})`);
+ok(['forget', 'decision-context', 'worktree-merge'].every((s) => !exists(`.claude/skills/${s}`)) && !exists('.claude/commands/aside.md') && !exists('.claude/commands/checkpoint.md'), '지운 사본의 빈 폴더까지 정리');
+ok(exists('.claude/skills/recall/SKILL.md') && exists('.claude/skills/my-skill/SKILL.md') && exists('.claude/commands/mine.md'), '고친 사본·사용자 스킬·사용자 명령은 그대로');
+const keys = Object.keys(manifest().files);
+ok(!keys.some((k) => k in old && k !== '.claude/skills/recall/SKILL.md') && keys.includes('.claude/skills/recall/SKILL.md'), '매니페스트: 지운 것은 기록 삭제, 남긴 것은 유지');
+const again = JSON.parse(spawnSync(process.execPath, [INSTALL, 'update', '--repo', ROOT], { encoding: 'utf8', env: { ...process.env, ORBIT_CODE_TOOLS: 'skip' } }).stdout || '{}');
+ok(again.retired?.removed.length === 0 && again.retired.kept.length === 1, '다시 update하면 지울 것 없음·고친 사본은 계속 알림');
+process.exit(failed ? 1 : 0);
+NODE
+S66_OUT="$(cd "$R66" && PLUGIN_ROOT="$(cd "$SKILL_DIR/../.." && pwd)" node "$WORK/scenario66.cjs")"; S66_RC=$?
+echo "${S66_OUT}"
+[ "${S66_RC}" = "0" ] || fail "시나리오 66 하위 항목 실패(위 ❌ 확인)"
 
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."

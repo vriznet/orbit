@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "orbit — 프로젝트 하네스 툴킷",
-    "version": "0.2.3"
+    "version": "0.2.4"
   },
   "plugins": [
     {

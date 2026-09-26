@@ -74,13 +74,13 @@
 |---|---|
 | `settings.hooks.base.json` | **항상** 설치되는 훅 배선(SessionStart 두 갈래·UserPromptSubmit·PreToolUse·PostToolUse·PreCompact·PostCompact·Stop → worklog·memory·wiki 훅). 설치기가 대상 `settings.json`에 병합한다. |
 | `agents/context-reader.md` | **항상** 설치. ADR 맥락을 제한 범위로 읽어 보고하는 서브에이전트. |
-| `agents/recall-searcher.md` | **항상** 설치. `/recall`이 부르는 기억 검색 서브에이전트(Sonnet 고정, 읽기 전용). |
+| `agents/recall-searcher.md` | **항상** 설치. `recall` 스킬이 부르는 기억 검색 서브에이전트(Sonnet 고정, 읽기 전용). |
 | `agents/database-reviewer.md` 외 4개 | **선택(리뷰어)**. 코드 리뷰 전문 에이전트 5종(database·react·security·silent-failure·typescript). |
-| `commands/aside.md`, `checkpoint.md` | **항상** 설치되는 일반 슬래시 명령. |
-| `skills/decision-context/` | **항상** 설치. ADR 기반 제한 맥락 수집 스킬(+`agents/openai.yaml`). |
-| `skills/worktree-merge/SKILL.md` | **항상** 설치. 워크트리 병합 시 원장 충돌 처리 스킬. |
-| `skills/recall/SKILL.md` | **항상** 설치. 옛 결정·이유·대화를 찾는 스킬(사용자·모델 모두 호출). |
-| `skills/forget/SKILL.md` | **항상** 설치. `/forget <문구>`로만 부르는 기억 지우기 스킬(모델 자동 호출 끔). |
+
+스킬 `recall`·`forget`·`decision-context`·`worktree-merge`는 0.2.4부터 저장소에 설치하지 않고 **플러그인 루트 `skills/`**에 있다
+(`/orbit:recall`처럼 플러그인 이름공간으로 부른다). 스킬은 저장소의 `.claude/orbit-manifest.json`(`docsDir`)과 `scripts/`를 쓰며,
+orbit이 없는 저장소에서는 멈춘다. `/aside`·`/checkpoint` 명령은 0.2.4에서 뺐다. update는 예전에 설치한 이 사본들을 설치 그대로일 때만 지우고,
+고친 사본은 남긴 채 요약 `retired.kept`로 알린다.
 
 ### 3.4 `assets/docs/` — 문서 볼트 스캐폴딩
 
@@ -117,7 +117,7 @@
 ## 모듈별 설치 여부 요약
 
 - **항상 설치**: `scripts/`의 원장·위키·기억·코드 도구, `settings.hooks.base`, `context-reader`·`recall-searcher`,
-  `aside`·`checkpoint`, `decision-context`, `worktree-merge`, `recall`, `forget`, `docs/` 스캐폴딩,
+  `docs/` 스캐폴딩,
   `githooks/commit-msg`. 코드 도구(tree-sitter WASM)는 저장소 밖 `~/.cache/orbit/code-tools/`에 받는다.
 - **선택 — Codex**: `AGENTS.md`, `codex-catchup.sh`.
 - **선택 — 리뷰어**: `agents/`의 리뷰어 5종.

@@ -12,8 +12,7 @@ orbit에는 다른 오픈소스 프로젝트에서 가져온 파일이 들어 �
   - `skills/setup/assets/claude/agents/security-reviewer.md`
   - `skills/setup/assets/claude/agents/silent-failure-hunter.md`
   - `skills/setup/assets/claude/agents/typescript-reviewer.md`
-  - `skills/setup/assets/claude/commands/aside.md`
-  - `skills/setup/assets/claude/commands/checkpoint.md`
+  - (0.2.3까지 함께 들어 있던 `/aside`·`/checkpoint` 명령은 0.2.4에서 뺐다.)
 
 `database-reviewer.md`는 원본에 적힌 대로 Supabase Agent Skills(MIT)의 패턴을 바탕으로 한다.
 

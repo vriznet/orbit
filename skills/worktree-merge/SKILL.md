@@ -9,17 +9,21 @@ description: 병렬 워크트리로 작업한 결과를 기본 브랜치에 병�
 
 핵심 전제: **사용자는 git 병합을 직접 다루지 않는다고 가정한다.** 사용자에게는 "무엇이 들어오나 · 어디가 부딪히나 · 되돌릴 수 있나" 세 가지만 보여주고 **진행/중단만** 받는다. 나머지는 AI가 아래 절차대로 실행한다.
 
+## 먼저 확인
+
+이 스킬은 orbit이 설치된 저장소에서만 쓴다. 저장소 루트에 `.claude/orbit-manifest.json`이 없으면 "이 저장소에는 orbit이 설치되어 있지 않습니다(`/orbit:setup`으로 설치)"라고 알리고 멈춘다.
+
 ## 절차
 
 ### 1. 진단 (읽기 전용, 아무것도 바꾸지 않음)
 
-사용자는 `/worktree-merge <워크트리 브랜치명>`으로 이 스킬을 부른다. 넘어온 인자 `$ARGUMENTS`가 병합할 브랜치명이다. 그 인자로 진단 스크립트를 실행한다:
+사용자는 `/orbit:worktree-merge <워크트리 브랜치명>`으로 이 스킬을 부른다. 넘어온 인자 `$ARGUMENTS`가 병합할 브랜치명이다. 그 인자로 진단 스크립트를 실행한다:
 
 ```
 node scripts/worktree-merge-inspect.mjs $ARGUMENTS
 ```
 
-브랜치명 없이 `/worktree-merge`만 불렀다면 `git worktree list`·`git branch`로 병합 후보를 확인해 사용자에게 보여주고, 어떤 워크트리를 병합할지 먼저 정한 뒤 그 이름으로 위 스크립트를 실행한다. **여러 워크트리를 한꺼번에 병합하지 않는다 — 한 번에 하나씩, 각 병합은 직전 병합이 반영된 기본 브랜치 기준으로 진행한다.**
+브랜치명 없이 `/orbit:worktree-merge`만 불렀다면 `git worktree list`·`git branch`로 병합 후보를 확인해 사용자에게 보여주고, 어떤 워크트리를 병합할지 먼저 정한 뒤 그 이름으로 위 스크립트를 실행한다. **여러 워크트리를 한꺼번에 병합하지 않는다 — 한 번에 하나씩, 각 병합은 직전 병합이 반영된 기본 브랜치 기준으로 진행한다.**
 
 이 스크립트가 "표 + 위험도" 보고를 출력한다 — 들어오는 산출물 표, 충돌·해소 계획 표(항목별 🟢🟡🔴), 분기 유형, 되돌리기 가능 여부, 종합 위험, "진행할까요?". **출력을 그대로 사용자에게 보여준다. 요약하거나 바꾸지 않는다.**
 
@@ -48,7 +52,9 @@ node scripts/worktree-merge-inspect.mjs $ARGUMENTS
 ```
 python3 - <<'EOF'
 import re
-m = open('{{DOCS_DIR}}/worklog.md').read()
+import json
+docs = json.load(open('.claude/orbit-manifest.json'))['docsDir']
+m = open(f'{docs}/worklog.md').read()
 nums = [int(x) for x in re.findall(r'(?m)^## \[#(\d+)\]', m)]
 missing = [n for n in range(1, max(nums)+1) if n not in set(nums)]
 dups = [n for n in set(nums) if nums.count(n) > 1]

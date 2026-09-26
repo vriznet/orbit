@@ -30,6 +30,7 @@ orbit:setup의 `install.mjs update`에 있고, 이 스킬은 그것을 호출해
    - `files.conflict`: **사용자가 직접 수정해 보존된 파일**이다(어느 파일인지 `conflicts`
      목록으로 알려준다). 이건 실패가 아니라 **의도된 보존**이다.
    - `merges.settingsJson` 등이 `update`면 훅·설정이 바뀌었다고 알린다.
+   - `retired.removed`: 더 설치하지 않는 옛 산출물(예: 0.2.4에서 플러그인으로 옮긴 스킬 사본, 뺀 `/aside`·`/checkpoint`)을 설치 그대로라 지운 목록이다. `retired.kept`는 사용자가 고쳐 남긴 사본이다 — 지우지 않았다는 것과, 플러그인 스킬(`/<플러그인>:recall` 등)이 대신한다는 것을 알린다.
    - `codeTools.status`가 `failed`면 조용히 넘기지 않는다: 코드 개요·펼치기가 동작하지 않는다는 것, 원인(`codeTools.error`), 다시 받는 명령(`node "${CLAUDE_SKILL_DIR}/../setup/scripts/install.mjs" code-tools`)을 알린다. 나머지 갱신은 정상이다.
 4. 훅·설정이 바뀌었으면 "새 세션(재시작)부터 적용된다"고 덧붙인다.
 

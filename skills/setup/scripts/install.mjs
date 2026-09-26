@@ -423,6 +423,7 @@ const vars = {
   PROJECT_NAME: options['project-name'],
   PROJECT_SLUG: options.slug,
   DOCS_DIR: docsName,
+  PLUGIN_NAME: pluginJson.name || 'orbit',
   REPO_ABS_PATH: repo,
   COLLAB_HEADING: collabHeading,
   COLLAB_INTRO: collabIntro,
@@ -566,10 +567,8 @@ for (const [source, destination, legacy] of directAssets) {
 }
 
 addAssetTree('docs', docsRoot, 'legacy/docs', true);
-addAssetTree('claude/skills/decision-context', path.join(repo, '.claude/skills/decision-context'));
-addAssetTree('claude/skills/worktree-merge', path.join(repo, '.claude/skills/worktree-merge'));
-addAssetTree('claude/skills/forget', path.join(repo, '.claude/skills/forget'));
-addAssetTree('claude/skills/recall', path.join(repo, '.claude/skills/recall'));
+// recall·forget·decision-context·worktree-merge 스킬은 0.2.4부터 플러그인에 들어 있다(/<플러그인>:recall 등).
+// 저장소에는 더 설치하지 않고, 예전에 설치한 사본은 아래 RETIRED_PATHS로 정리한다.
 // 항상 설치하는 에이전트. 리뷰어(선택 모듈) 반복에서는 뺀다.
 const ALWAYS_AGENTS = ['context-reader.md', 'recall-searcher.md'];
 for (const name of ALWAYS_AGENTS) {
@@ -583,9 +582,26 @@ if (options.reviewers) {
   }
 }
 
-// aside·checkpoint 같은 일반 명령은 항상 설치한다.
-for (const source of walkFiles(path.join(ASSETS, 'claude/commands'))) {
-  addFile(source, path.join(repo, '.claude/commands', path.basename(source)));
+// ── 더 설치하지 않는 옛 산출물 정리 ─────────────────────────────────────────────
+// 매니페스트에 기록된(= orbit이 설치한) 파일만 본다. 설치 그대로면 지우고, 사용자가 고쳤으면
+// 남겨 두고 알린다. 사용자가 직접 만든 같은 폴더의 다른 파일은 건드리지 않는다.
+//   0.2.4: 저장소 사본 스킬 4개 → 플러그인 스킬로, /aside·/checkpoint 명령은 뺌.
+const RETIRED_PATHS = [
+  '.claude/skills/decision-context/',
+  '.claude/skills/worktree-merge/',
+  '.claude/skills/forget/',
+  '.claude/skills/recall/',
+  '.claude/commands/aside.md',
+  '.claude/commands/checkpoint.md',
+];
+const retired = { removed: [], kept: [], forgotten: [] };
+const retiredKeys = new Set();
+for (const key of Object.keys(manifest?.files ?? {})) {
+  if (!RETIRED_PATHS.some((prefix) => (prefix.endsWith('/') ? key.startsWith(prefix) : key === prefix))) continue;
+  const file = path.join(repo, key);
+  if (!fs.existsSync(file)) { retired.forgotten.push(key); retiredKeys.add(key); continue; }
+  if (manifestHashMatches(key, fs.readFileSync(file))) { retired.removed.push(key); retiredKeys.add(key); }
+  else retired.kept.push(key); // 고친 사본은 남긴다(매니페스트 기록도 남겨 다음 update에서 다시 알린다)
 }
 
 // N01 게이트 — 어떤 파일도 바꾸기 전에, 렌더된 .mjs 산출물이 전부 실제로 파싱 가능한지
@@ -793,6 +809,8 @@ const summary = {
     hooksReplaced: mergeStats.hooksReplaced,
   },
   conflicts,
+  // 더 설치하지 않는 옛 산출물: removed(설치 그대로라 지움)·kept(사용자가 고쳐 남김)·forgotten(이미 없음).
+  retired,
   // 옛 harness-state/worklog → orbit-state/worklog 이관 계획(null이면 옮길 것 없음).
   stateMigration: legacyStateDir && fs.existsSync(legacyStateDir)
     ? { from: path.relative(repo, legacyStateDir), to: path.relative(repo, orbitStateDir), files: legacyStateFiles.length }
@@ -846,6 +864,7 @@ function writeManifest() {
   // 기존 매니페스트의 files를 밑에 깔고 이번 실행분으로 덮어쓴다(F2) — 이번에 손대지 않은
   // 이전 모듈(예: 플래그 없는 upgrade에서의 codex·리뷰어 산출물) 해시가 사라지지 않게 한다.
   const files = { ...(manifest?.files ?? {}) };
+  for (const key of retiredKeys) delete files[key];
   for (const op of operations) {
     if (op.status === 'conflict') continue;
     files[op.manifestKey] = sha256Hex(op.desired);
@@ -889,6 +908,20 @@ try {
     // 충돌을 보존한 채 나머지만 적용한다.
     if (operation.status === 'skip' || operation.status === 'conflict') continue;
     writeFileWithUndo(operation.destination, operation.desired, operation.mode);
+  }
+
+  for (const key of retired.removed) {
+    const file = path.join(repo, key);
+    const backupPath = backupFile(file);
+    const prevMode = fs.statSync(file).mode & 0o777;
+    undo.push(() => { fs.mkdirSync(path.dirname(file), { recursive: true }); atomicWrite(file, fs.readFileSync(backupPath), prevMode); });
+    fs.rmSync(file, { force: true });
+    // 비게 된 폴더만 .claude 아래까지 올라가며 지운다.
+    let dir = path.dirname(file);
+    while (dir.startsWith(path.join(repo, '.claude') + path.sep)) {
+      try { if (fs.readdirSync(dir).length) break; fs.rmdirSync(dir); } catch { break; }
+      dir = path.dirname(dir);
+    }
   }
 
   if (syntheticStatus(packageFile, packageDesired) !== 'skip') writeFileWithUndo(packageFile, packageDesired, 0o644);

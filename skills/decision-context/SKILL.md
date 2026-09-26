@@ -7,17 +7,21 @@ description: ADR에 따라 기능·스킬·훅·플러그인을 구현하거나 
 
 확정된 결정을 출발점으로 별도 `context-reader` 서브에이전트가 관련 문서만 읽게 한다. 메인 에이전트는 짧은 보고서를 종합해 구현에 필요한 제약과 검증 조건만 유지한다.
 
+## 먼저 확인
+
+이 스킬은 orbit이 설치된 저장소에서만 쓴다. 저장소 루트에 `.claude/orbit-manifest.json`이 없으면 "이 저장소에는 orbit이 설치되어 있지 않습니다(`/orbit:setup`으로 설치)"라고 알리고 멈춘다. 문서 폴더 이름은 그 파일의 `docsDir` 값이다(이하 `<docs>`, 보통 `<slug>-docs`).
+
 ## 입력 확인
 
-1. `$ARGUMENTS`와 현재 요청에서 ADR 번호 또는 `{{DOCS_DIR}}/decisions/` 경로와 수행할 작업을 찾는다.
-2. ADR이 명시되지 않았으면 `{{DOCS_DIR}}/decisions/README.md` 인덱스만 읽어 적용할 후보를 찾는다.
+1. `$ARGUMENTS`와 현재 요청에서 ADR 번호 또는 `<docs>/decisions/` 경로와 수행할 작업을 찾는다.
+2. ADR이 명시되지 않았으면 `<docs>/decisions/README.md` 인덱스만 읽어 적용할 후보를 찾는다.
 3. 후보가 없거나 여러 개면 추정하지 말고 사용자에게 어떤 ADR을 적용할지 묻는다.
 4. 사용자가 요청하지 않은 탐색 깊이·문서 수·글자 수 확장은 하지 않는다.
 
 직접 호출 예:
 
 ```text
-/decision-context D01 위키 링크 검사 훅 구현
+/orbit:decision-context D01 위키 링크 검사 훅 구현
 ```
 
 ## 맥락 수집
@@ -25,7 +29,7 @@ description: ADR에 따라 기능·스킬·훅·플러그인을 구현하거나 
 적용할 ADR마다 `context-reader` 서브에이전트를 별도 호출한다. 위임 메시지는 다음 형식을 사용한다.
 
 ```text
-ADR: 순번 ID 또는 D-슬러그-YYMMDD-HHMMSS 또는 {{DOCS_DIR}}/decisions/<파일명>.md
+ADR: 순번 ID 또는 D-슬러그-YYMMDD-HHMMSS 또는 <docs>/decisions/<파일명>.md
 작업: 이번에 구현하거나 검토할 구체적인 작업
 범위 조정: 사용자가 명시한 경우에만 적는다
 ```

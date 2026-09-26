@@ -1,6 +1,6 @@
 ---
 name: setup
-description: 저장소에 orbit 프로젝트 하네스를 설치한다. worklog 작업 일지, GTD 할일 원장, ADR, 연결형 위키, 제한된 결정 맥락 수집(decision-context), Claude 훅과 선택형 Codex·리뷰어 모듈을 안전하게 설치한다. "orbit 깔아줘", "하네스 설치", "이 레포에 orbit 세팅", "harness setup" 같은 요청, 신규 설치·기존 docs 마이그레이션·업그레이드 상황이면 반드시 이 스킬을 쓴다.
+description: 저장소에 orbit 프로젝트 하네스를 설치한다. worklog 작업 일지, GTD 할일 원장, ADR, 연결형 위키, 제한된 결정 맥락 수집(context-reader 에이전트, /orbit:decision-context), Claude 훅과 선택형 Codex·리뷰어 모듈을 안전하게 설치한다. "orbit 깔아줘", "하네스 설치", "이 레포에 orbit 세팅", "harness setup" 같은 요청, 신규 설치·기존 docs 마이그레이션·업그레이드 상황이면 반드시 이 스킬을 쓴다.
 ---
 
 # Orbit setup
@@ -137,7 +137,7 @@ fi
 
 각 선택지 설명에는 기능의 효과와 비용을 한 문장으로 적는다. `Codex` 같은 구현 이름은 설명 끝의 괄호에만 적는다.
 
-`/aside`, `/checkpoint` 명령은 선택 기능과 상관없이 항상 설치된다.
+`/orbit:recall`, `/orbit:forget`, `/orbit:decision-context`, `/orbit:worktree-merge` 스킬은 저장소에 설치하지 않는다 — 플러그인에 들어 있어 orbit이 설치된 저장소에서 바로 쓴다.
 
 `new`, `migrate`, `upgrade`는 설치기의 내부 분기다. 이 영문 값을 사용자에게 선택지로 보여주거나 "설치 모드"를 고르라고 묻지 않는다. 표시 이름과 슬러그를 모두 사용자에게 받은 뒤 저장소 상태로 다음처럼 자동 판정한다.
 
