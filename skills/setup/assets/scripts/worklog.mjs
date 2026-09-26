@@ -11,6 +11,7 @@
 //   append ... --session-id <ID> --turn-token <TOKEN>  Claude 훅의 이번 턴 미기록 상태를 완료한다
 //   append ... --session-id <ID> --turn-id <N>          위와 동일하되 구버전 훅과의 호환용(토큰 없을 때)
 //   append ... --commit "<커밋메시지>"  기록 직후 git add -A + 커밋까지 한 번에 (순서 실수 방지)
+//   append ... --why "<판단>" --found "<발견>"  선택 칸. 고른 것·버린 것과 이유·핵심 수치, 이번 턴에 알아낸 것
 //   summary <작성자> "<요약>"           최근 턴들을 하나로 묶어 요약한다 (3턴마다)
 //   catchup <작성자>                    책갈피 이후 밀린 내용을 보여주고 책갈피를 옮긴다 (없으면 조용)
 //   recent <작성자> [--mode compact]     최근 턴 8개와 그 앞 구간 요약들을 보여준다 (읽기 전용)
@@ -211,7 +212,7 @@ function maxTurnNumberInTail(logFile, tailBytes = 8192) {
   }
 }
 
-function append(agent, ask, result) {
+function append(agent, ask, result, extra = {}) {
   ensureLog();
   return withLock(STATE, () => {
     const s = loadState();
@@ -221,9 +222,15 @@ function append(agent, ask, result) {
     // 로그보다 큰 경우)도 교정한다 — 앞서면 결번이 생기므로. 정상 동작에선 이미 최대+1이라 무변화.
     if (maxLogged !== null) s.next = maxLogged + 1;
     const n = s.next;
+    // 선택 칸은 값이 있을 때만 쓴다. 칸마다 한 줄(sanitize)이라 가짜 머리글이 생기지 않는다.
+    // 결정: D-프로젝트-기억-분담(결정 5·7) — 이유와 "알아낸 것"을 모델 호출 없이 남긴다.
+    const optional = [['판단', extra.why], ['발견', extra.found]]
+      .filter(([, value]) => String(value ?? '').trim())
+      .map(([label, value]) => `- ${label}: ${sanitizeLogText(value)}\n`)
+      .join('');
     fs.appendFileSync(
       LOG,
-      `## [#${n}] ${today()} · ${agent} · with:user\n- 물음: ${sanitizeLogText(ask)}\n- 결과: ${sanitizeLogText(result)}\n\n`
+      `## [#${n}] ${today()} · ${agent} · with:user\n- 물음: ${sanitizeLogText(ask)}\n- 결과: ${sanitizeLogText(result)}\n${optional}\n`
     );
     s.next = n + 1;
     s.bookmarks[agent] = n; // 자기가 쓴 것은 읽은 것으로 본다
@@ -429,6 +436,8 @@ const hookSessionId = takeOption('--session-id');
 const hookTurnToken = takeOption('--turn-token');
 const hookTurnId = takeOption('--turn-id');
 const recentMode = takeOption('--mode');
+const whyText = takeOption('--why');
+const foundText = takeOption('--found');
 
 // 기록을 커밋에 포함 → 순서 실수(커밋 먼저, 기록 나중)를 원천 차단
 function gitCommitAll(msg) {
@@ -447,7 +456,7 @@ if (!WHO.includes(agent)) {
   process.exit(1);
 }
 if (cmd === 'append') {
-  const n = append(agent, a ?? '', b ?? '');
+  const n = append(agent, a ?? '', b ?? '', { why: whyText, found: foundText });
   completeHookTurn(hookSessionId, hookTurnToken, hookTurnId, n);
   if (commitMsg !== null) gitCommitAll(commitMsg);
 } else if (cmd === 'summary') {
@@ -456,6 +465,6 @@ if (cmd === 'append') {
 } else if (cmd === 'catchup') catchup(agent);
 else if (cmd === 'recent') recent(recentMode);
 else {
-  process.stderr.write('사용법: worklog <append|summary|catchup|recent> <claude|codex> ... [--commit "메시지"] [--session-id ID --turn-token TOKEN | --session-id ID --turn-id N] [--mode compact]\n');
+  process.stderr.write('사용법: worklog <append|summary|catchup|recent> <claude|codex> ... [--commit "메시지"] [--session-id ID --turn-token TOKEN | --session-id ID --turn-id N] [--why 판단] [--found 발견] [--mode compact]\n');
   process.exit(1);
 }

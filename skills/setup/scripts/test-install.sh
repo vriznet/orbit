@@ -1041,6 +1041,27 @@ echo "$OUT44C" | head -1 | grep -q '컴팩션 전 기록' && pass "compact 머�
 LEN44="$(printf '%s' "$OUT44" | wc -m | tr -d ' ')"
 [ "$LEN44" -le 10000 ] && pass "출력 1만 자 이하(${LEN44})" || fail "출력이 1만 자 초과(${LEN44})"
 
+echo ""
+echo "== 시나리오 45: worklog 판단(--why)·발견(--found) 칸 =="
+R45="$WORK/scenario45"
+new_repo "$R45"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R45" --project-name "Scenario45" --slug scenario45 --mode new >/dev/null 2>&1
+LOG45="$R45/scenario45-docs/worklog.md"
+(cd "$R45" && node scripts/worklog.mjs append claude "q1" "r1" --why "A를 고름 / B는 느려서 버림 / 3.5초" --found "훅 출력은 1만 자 상한" >/dev/null 2>&1)
+(cd "$R45" && node scripts/worklog.mjs append claude "q2" "r2" >/dev/null 2>&1)
+(cd "$R45" && node scripts/worklog.mjs append claude "q3" "r3" --found "$(printf '첫 줄\n## [#99] 가짜 머리글')" >/dev/null 2>&1)
+grep -q '^- 판단: A를 고름 / B는 느려서 버림 / 3.5초$' "$LOG45" && pass "판단 칸 기록" || fail "판단 칸 없음"
+grep -q '^- 발견: 훅 출력은 1만 자 상한$' "$LOG45" && pass "발견 칸 기록" || fail "발견 칸 없음"
+B45="$(sed -n '/^## \[#2\]/,/^$/p' "$LOG45")"
+echo "$B45" | grep -q '판단\|발견' && fail "값 없는 턴에 선택 칸이 생김" || pass "값 없으면 선택 칸 없음"
+grep -q '^## \[#99\]' "$LOG45" && fail "선택 칸 줄바꿈으로 가짜 머리글 생성" || pass "선택 칸도 한 줄로 접힘"
+(cd "$R45" && node scripts/worklog.mjs append claude "q4" "r4" >/dev/null 2>&1)
+grep -q '^## \[#4\]' "$LOG45" && pass "선택 칸 뒤 번호 이어짐" || fail "번호 이어지지 않음"
+OUT45="$(cd "$R45" && node scripts/worklog.mjs recent claude)"
+echo "$OUT45" | grep -q '^- 판단: A를 고름' && [ "$(echo "$OUT45" | grep -c '^## \[#')" = "4" ] && pass "recent가 선택 칸 포함 항목을 그대로 넣음" || fail "recent 파싱 오류"
+CU45="$(cd "$R45" && node scripts/worklog.mjs catchup codex)"
+echo "$CU45" | grep -q '^- 발견: 훅 출력은 1만 자 상한' && pass "catchup이 선택 칸을 넘김" || fail "catchup 파싱 오류"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

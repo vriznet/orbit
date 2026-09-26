@@ -19,6 +19,7 @@
 ## 협업 (Codex와 턴제)
 Claude와 Codex는 대화 맥락을 공유 못 한다. `{{DOCS_DIR}}/worklog.md`로 서로의 "왜"를 잇는다(Codex 진입점 `AGENTS.md`). 턴 시작 따라잡기는 훅이 자동 처리. 일지는 **덧붙이기만**(이견은 새 항목 "Codex의 #N에 반대 …").
 - **최종 답변 전 기록**: 사용자 프롬프트 훅이 알려준 `--session-id`와 `--turn-token`을 포함해 `node scripts/worklog.mjs append claude "<물음>" "<결과>" ...`를 실행한다. 성공하기 전에는 최종 답변을 보내지 않는다. "요약할 때"면 이어서 `... summary claude "<최근 3턴 요약>"`도 실행한다.
+- **판단·발견 칸**: 대안 중 하나를 골랐으면 `--why "고른 것 / 버린 것과 이유 / 핵심 수치"`, 새로 알아낸 사실이 있으면 `--found "<발견>"`을 붙인다(없으면 생략).
 - **커밋과 함께 갈 땐 `--commit`으로 묶는다**(따로 미루면 worklog가 한 커밋씩 밀림): `... append claude "물음" "결과" --commit "<메시지>"`.
 
 ## 매 턴 자기평가 (상세는 `{{DOCS_DIR}}/rules.md`)
