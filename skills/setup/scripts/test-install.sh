@@ -1587,6 +1587,62 @@ NODE
 echo "${S57_OUT}"
 [ "${S57_RC}" = "0" ] || fail "시나리오 57 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 58: 도구를 많이 쓴 턴의 발견 칸 알림·worklog found =="
+R58="$WORK/scenario58"
+new_repo "$R58"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R58" --project-name "Scenario58" --slug scenario58 --mode new >/dev/null 2>&1
+S58_OUT="$(cd "$R58" && node - <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd(); const LOG = path.join(ROOT, 'scenario58-docs', 'worklog.md');
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const hook = (mode, input, env = {}) => spawnSync(process.execPath, ['scripts/worklog-hook.mjs', mode], { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, ...env } });
+const tokenOf = (r) => (r.stdout.match(/--turn-token \\?"([0-9a-f]+)\\?"/) || [])[1];
+const append = (...args) => spawnSync(process.execPath, ['scripts/worklog.mjs', 'append', 'claude', ...args], { encoding: 'utf8' });
+const transcript = (name, promptId, tools) => {
+  const file = path.join(ROOT, '..', `${name}.jsonl`);
+  const lines = [{ type: 'user', promptId, message: { role: 'user', content: '요청' } }];
+  for (let i = 0; i < tools; i += 1) lines.push({ type: 'user', promptId, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${i}`, content: 'ok' }] } });
+  fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  return file;
+};
+const turn = (sid, pid, tools, extra = [], env = {}) => {
+  const b = hook('begin', { session_id: sid, prompt: '요청', prompt_id: pid });
+  const T = transcript(`${sid}-${pid}`, pid, tools);
+  append('물음', '결과', '--session-id', sid, '--turn-token', tokenOf(b), ...extra);
+  return { T, stop: (active = false) => hook('stop', { session_id: sid, prompt_id: pid, transcript_path: T, stop_hook_active: active }, env) };
+};
+// 도구 10회 + 발견 없음 → 한 번 알림
+const a = turn('s58a', 'pA', 10);
+const s1 = a.stop();
+const j1 = s1.stdout ? JSON.parse(s1.stdout) : {};
+ok(j1.decision === 'block' && /도구를 10번/.test(j1.reason) && /found claude \d+/.test(j1.reason), '도구 10회·발견 없음 → 알림(found 명령 안내)');
+ok(a.stop(true).stdout === '', '두 번째 Stop(stop_hook_active) → 통과');
+ok(a.stop(false).stdout === '', '같은 항목은 다시 알리지 않음');
+const n = (j1.reason?.match(/found claude (\d+)/) || [])[1];
+const f1 = spawnSync(process.execPath, ['scripts/worklog.mjs', 'found', 'claude', n, '캐시 TTL이 원인'], { encoding: 'utf8' });
+const blockA = fs.readFileSync(LOG, 'utf8').split(/\n(?=## \[)/).find((b) => b.startsWith(`## [#${n}]`)) || '';
+ok(f1.status === 0 && /^- 발견: 캐시 TTL이 원인$/m.test(blockA) && /^- 결과: 결과$/m.test(blockA), 'found가 그 항목에 발견 줄을 덧붙임');
+ok(spawnSync(process.execPath, ['scripts/worklog.mjs', 'found', 'claude', n, '또'], { encoding: 'utf8' }).status === 1, '이미 있으면 거부');
+const next = append('다음', '결과2'); ok(/기록됨 \[#\d+\]/.test(next.stdout), 'found 뒤에도 번호 이어짐');
+// 발견 있음·"없음" → 통과
+ok(turn('s58b', 'pB', 12, ['--found', '원인 발견']).stop().stdout === '', '발견 있음 → 통과');
+ok(turn('s58c', 'pC', 12, ['--found', '없음']).stop().stdout === '', '"없음" 명시 → 통과');
+// 9회 이하 → 통과, 설정 0 → 끔
+ok(turn('s58d', 'pD', 9).stop().stdout === '', '도구 9회 → 통과');
+const e = turn('s58e', 'pE', 15);
+ok(e.stop().stdout && hook('stop', { session_id: 'x' }).status === 0, '기준 이상이면 알림(대조)');
+ok(turn('s58f', 'pF', 15, [], { ORBIT_FOUND_MIN_TOOLS: '0' }).stop().stdout === '', 'ORBIT_FOUND_MIN_TOOLS=0 → 끔');
+// 기록 자체가 없으면 기존 강제만(발견 알림 아님)
+const b = hook('begin', { session_id: 's58g', prompt: '요청', prompt_id: 'pG' });
+const g = hook('stop', { session_id: 's58g', prompt_id: 'pG', transcript_path: transcript('g', 'pG', 20) });
+ok(g.stdout.includes('기록되지 않았습니다') && !g.stdout.includes('발견'), '미기록이면 기존 기록 강제만');
+process.exit(failed ? 1 : 0);
+NODE
+)"; S58_RC=$?
+echo "${S58_OUT}"
+[ "${S58_RC}" = "0" ] || fail "시나리오 58 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

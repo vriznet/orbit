@@ -13,6 +13,7 @@
 //   append ... --commit "<커밋메시지>"  기록 직후 git add -A + 커밋까지 한 번에 (순서 실수 방지)
 //   append ... --why "<판단>" --found "<발견>"  선택 칸. 고른 것·버린 것과 이유·핵심 수치, 이번 턴에 알아낸 것
 //   summary <작성자> "<요약>"           최근 턴들을 하나로 묶어 요약한다 (3턴마다)
+//   found <작성자> <N> "<발견>"         이미 적은 항목 #N에 '- 발견:' 줄을 덧붙인다(종료 훅 알림용, 이미 있으면 거부)
 //   catchup <작성자>                    책갈피 이후 밀린 내용을 보여주고 책갈피를 옮긴다 (없으면 조용)
 //   recent <작성자> [--mode compact]     최근 턴 8개와 그 앞 구간 요약들을 보여준다 (읽기 전용)
 //
@@ -285,7 +286,8 @@ function completeHookTurnLocked(stateDir, statePath, turnToken, turnId, entry) {
   );
   if (pendingMatches) {
     // 이 턴에 합쳐진 앞 턴(merged)들도 함께 닫힌다 — 새 턴의 기록이 그 입력까지 요약한다.
-    writeCompletedHookState(stateDir, statePath, { ...state, pending: null, entry });
+    // entryPromptIds: 이 항목이 어느 사용자 턴의 기록인지 — 종료 훅이 '발견' 칸 알림을 판단할 때 쓴다.
+    writeCompletedHookState(stateDir, statePath, { ...state, pending: null, entry, entryPromptIds: state.pending.promptIds || [] });
     return;
   }
 
@@ -323,6 +325,29 @@ function writeCompletedHookState(stateDir, statePath, updated) {
     throw error;
   }
   try { fs.chmodSync(statePath, 0o600); } catch {}
+}
+
+// 이미 적은 항목에 '발견' 줄을 덧붙인다. 종료 훅이 "도구를 많이 쓴 턴인데 발견 칸이 비었다"고
+// 알린 뒤에 쓴다 — 같은 턴을 다시 append하면 항목이 둘로 갈리기 때문이다. 덧붙이기 규칙의 좁은
+// 예외: 그 항목 안에만 한 줄을 끼우고 다른 글은 건드리지 않는다. 결정: D-프로젝트-기억-분담(결정 5·7).
+function found(n, text) {
+  const value = sanitizeLogText(text).trim();
+  if (!/^\d+$/.test(String(n)) || !value) {
+    process.stderr.write('사용법: worklog found <작성자> <항목 번호> "<발견>"\n');
+    process.exit(1);
+  }
+  withLock(STATE, () => {
+    if (!fs.existsSync(LOG)) { process.stderr.write('worklog가 없습니다.\n'); process.exit(1); }
+    const blocks = fs.readFileSync(LOG, 'utf8').split(/(?=^## \[)/m);
+    const index = blocks.findIndex((block) => block.startsWith(`## [#${n}]`));
+    if (index === -1) { process.stderr.write(`항목 #${n}이 없습니다.\n`); process.exit(1); }
+    if (/^- 발견:/m.test(blocks[index])) { process.stderr.write(`항목 #${n}에 이미 발견 줄이 있습니다.\n`); process.exit(1); }
+    const body = blocks[index].replace(/\n+$/, '');
+    const tail = blocks[index].slice(body.length) || '\n\n';
+    blocks[index] = `${body}\n- 발견: ${value}${tail}`;
+    atomicWriteFile(LOG, blocks.join(''));
+    process.stdout.write(`항목 #${n}에 발견을 덧붙였습니다.\n`);
+  });
 }
 
 function summary(agent, text) {
@@ -461,12 +486,15 @@ if (cmd === 'append') {
   const n = append(agent, a ?? '', b ?? '', { why: whyText, found: foundText });
   completeHookTurn(hookSessionId, hookTurnToken, hookTurnId, n);
   if (commitMsg !== null) gitCommitAll(commitMsg);
+} else if (cmd === 'found') {
+  found(a, b ?? '');
+  if (commitMsg !== null) gitCommitAll(commitMsg);
 } else if (cmd === 'summary') {
   summary(agent, a ?? '');
   if (commitMsg !== null) gitCommitAll(commitMsg);
 } else if (cmd === 'catchup') catchup(agent);
 else if (cmd === 'recent') recent(recentMode);
 else {
-  process.stderr.write('사용법: worklog <append|summary|catchup|recent> <작성자(claude|codex|…)> ... [--commit "메시지"] [--session-id ID --turn-token TOKEN | --session-id ID --turn-id N] [--why 판단] [--found 발견] [--mode compact]\n');
+  process.stderr.write('사용법: worklog <append|summary|found|catchup|recent> <작성자(claude|codex|…)> ... [--commit "메시지"] [--session-id ID --turn-token TOKEN | --session-id ID --turn-id N] [--why 판단] [--found 발견] [--mode compact]\n');
   process.exit(1);
 }

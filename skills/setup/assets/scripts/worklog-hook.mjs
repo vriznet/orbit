@@ -174,6 +174,10 @@ function normalizeState(previous, input) {
     orphans: Array.isArray(previous?.orphans) ? previous.orphans : [],
     notices: Array.isArray(previous?.notices) ? previous.notices : [],
     lastPromptId: previous?.lastPromptId ?? null,
+    // 마지막으로 기록된 항목과 그 턴의 prompt_id — 대화 사본의 worklog 연결과 '발견' 칸 알림이 쓴다.
+    entry: Number.isFinite(Number(previous?.entry)) && previous?.entry !== null ? Number(previous.entry) : null,
+    entryPromptIds: Array.isArray(previous?.entryPromptIds) ? previous.entryPromptIds : [],
+    foundNudged: previous?.foundNudged ?? null,
   };
 }
 
@@ -489,6 +493,57 @@ function pendingNote(pending) {
 }
 
 // 종료 판단은 잠금 안에서 하고, worklog.mjs를 부르는 일(자동 복구·알림 기록)은 잠금 밖에서 한다.
+// ── '발견' 칸 알림 ───────────────────────────────────────────────────────────────
+// 도구를 많이 쓴 턴(기본 10회, ORBIT_FOUND_MIN_TOOLS로 바꿈, 0이면 끔)이 기록은 됐는데 '- 발견:'
+// 줄이 없으면 한 번 막고 알린다. 도구마다 AI로 요약하던 claude-mem 관찰자를 빼는 대신, 알아낸
+// 것은 메인 Claude가 한 줄 남기게 하는 보완이다. 턴당 한 번(stop_hook_active·foundNudged).
+// 결정: D-프로젝트-기억-분담(결정 7).
+function foundMinTools() {
+  const value = Number(process.env.ORBIT_FOUND_MIN_TOOLS);
+  return Number.isFinite(value) && value >= 0 && process.env.ORBIT_FOUND_MIN_TOOLS !== '' ? value : 10;
+}
+
+function worklogBlock(entry) {
+  try {
+    return fs.readFileSync(WORKLOG_LOG, 'utf8').split(/\n(?=## \[)/).find((block) => block.startsWith(`## [#${entry}]`)) || null;
+  } catch {
+    return null;
+  }
+}
+
+// 이번 턴의 도구 사용 수: 세션 기록에서 그 턴의 prompt_id가 붙은 도구 결과(tool_result)를 센다.
+// (assistant 항목에는 prompt_id가 없고, 도구 결과를 담은 user 항목에는 있다.)
+function countTurnTools(transcriptPath, promptIds) {
+  if (!transcriptPath || !promptIds.size) return 0;
+  let text;
+  try { text = fs.readFileSync(transcriptPath, 'utf8'); } catch { return 0; }
+  let count = 0;
+  for (const line of text.split('\n')) {
+    if (!line.includes('"tool_result"')) continue;
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (!promptIds.has(entry.promptId) || !Array.isArray(entry.message?.content)) continue;
+    count += entry.message.content.filter((part) => part?.type === 'tool_result').length;
+  }
+  return count;
+}
+
+function foundNudge(input, state, promptId) {
+  const minimum = foundMinTools();
+  if (!minimum || input.stop_hook_active || !promptId) return null;
+  const entry = state.entry;
+  if (entry === null || !state.entryPromptIds.includes(promptId) || state.foundNudged === entry) return null;
+  const block = worklogBlock(entry);
+  if (!block || /^- 발견:/m.test(block)) return null;
+  const tools = countTurnTools(input.transcript_path, new Set(state.entryPromptIds));
+  if (tools < minimum) return null;
+  withStateLock(input, () => {
+    const { state: current, error } = readStateRaw(input);
+    if (!error) writeState(input, { ...normalizeState(current, input), foundNudged: entry });
+  });
+  return { entry, tools };
+}
+
 function decideStop(input, promptId) {
   const { exists, state, error } = readStateRaw(input);
   if (!exists) return { kind: 'none' }; // 이번 세션에 begin이 한 번도 없었다 — 조용히 통과
@@ -551,6 +606,13 @@ function handleStop(input) {
 
   if (decision.kind === 'idle') {
     flushOrphans(workingState.sessionId, workingState.orphans);
+    const nudge = foundNudge(input, workingState, promptId);
+    if (nudge) {
+      process.stdout.write(JSON.stringify({
+        decision: 'block',
+        reason: `도구를 ${nudge.tools}번 쓴 턴인데 worklog #${nudge.entry}에 '발견'이 없습니다. 이번 턴에 알아낸 것(원인·제약·동작 방식)을 한 줄 남기세요. 없으면 "없음"이라고 적습니다:\nnode scripts/worklog.mjs found claude ${nudge.entry} "<발견>"`,
+      }));
+    }
     return;
   }
 
