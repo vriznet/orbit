@@ -4,7 +4,7 @@
 
 프로젝트 하나에 세션 하나로 오래 일해도 컴팩션 뒤 맥락을 잃지 않고, 지난 결정과 이유를 다시 찾을 수 있게 기억을 넓혔다. 결정: D-프로젝트-기억-분담, D-잊어줘-슬래시명령, D-코드개요-tree-sitter.
 
-- **컴팩션 이어가기**: PreCompact 훅이 마지막 worklog 기록 뒤 구간(사용자 입력 원문·고친 파일·할일·미완료 백그라운드 작업·`/compact` 초점)을 상태 파일로 남기고, 컴팩션 직후 SessionStart(compact)가 상태 파일과 worklog를 "컴팩션 전 기록"으로 넣는다. PostCompact는 요약을 저장만 한다. CLAUDE.md에 `Compact instructions`(이유·조건·수치·미결 질문을 남기라) 절.
+- **컴팩션 이어가기**: PreCompact 훅이 마지막 worklog 기록 뒤 구간(사용자 입력 원문·고친 파일·할일·미완료 백그라운드 작업·`/compact` 초점)을 상태 파일로 남기고, 컴팩션 직후 SessionStart(compact)가 상태 파일과 worklog를 "컴팩션 전 기록"으로 넣는다. PostCompact는 요약을 저장만 한다. CLAUDE.md에 `Compact instructions`(이유·조건·수치·미결 질문을 남기라) 절. 효과 측정용으로 `ORBIT_COMPACT_WORKLOG=off`면 컴팩션 직후 worklog를 빼고 상태 파일만 넣는다.
 - **worklog**: `recent`가 최근 8턴과 그 앞 구간 요약을 넣는다(최근 턴과 겹치는 요약·알림 묶음 제외). 선택 칸 `--why`(판단)·`--found`(발견)와 이미 쓴 항목에 발견을 덧붙이는 `found`. 작성자에 다른 에이전트 이름 허용. 도구를 많이 쓴 턴에 발견 칸이 비면 종료 훅이 한 번 알린다. Claude가 이미 기록한 알림은 다시 묶지 않는다. 훅 배선이 오류를 숨기지 않는다.
 - **대화 글 사본·도구 활동 색인**: 턴이 끝날 때 사람·AI 글(가림)과 도구 활동(이름·파일·명령 앞부분)을 `.git` 공용 폴더에 쌓는다(앞으로의 대화만, 자동 삭제 없음, 바뀐 파일은 git 상태로 추정).
 - **찾기**: `memory.mjs search`(ADR·위키·worklog·대화 사본·도구 활동, 번호 목록)와 `show <번호>`. `/recall` 스킬과 Sonnet 서브에이전트 `recall-searcher`가 뜻으로 깊게 찾는다. 파일을 읽거나 고칠 때 그 파일의 과거 턴 목록을 넣는다.

@@ -148,9 +148,13 @@ function compactRestore(input) {
     if (state.length > RESTORE_STATE_LIMIT) state = `${state.slice(0, RESTORE_STATE_LIMIT - 30)}\n…(상태 파일 일부 생략: ${path.relative(ROOT, file)})`;
     parts.push(state);
   }
-  const used = parts.join('\n\n').length;
-  const recent = fitRecent(recentCompact(), RESTORE_LIMIT - used - 2);
-  if (recent) parts.push(recent);
+  // 측정용 스위치: ORBIT_COMPACT_WORKLOG=off면 컴팩션 직후 worklog를 넣지 않는다(결정 3의 2×2 비교, 조건 C·D).
+  // 전역 설정이 아니라 프로젝트 .claude/settings.local.json의 env로 켜고 끈다.
+  if ((process.env.ORBIT_COMPACT_WORKLOG || '').toLowerCase() !== 'off') {
+    const used = parts.join('\n\n').length;
+    const recent = fitRecent(recentCompact(), RESTORE_LIMIT - used - 2);
+    if (recent) parts.push(recent);
+  }
   if (parts.length) process.stdout.write(`${parts.join('\n\n')}\n`);
 }
 

@@ -74,7 +74,7 @@ orbit이 설치된 저장소(`.claude/orbit-manifest.json`이 있는 저장소)�
 
 - 저장 전에 알려진 모양의 비밀값(키·토큰·개인키·주소 속 비밀번호·`PASSWORD=` 등)을 가린다. 모양이 알려지지 않은 비밀값은 남을 수 있다.
 - 지우기: `/forget <문구>` — 미리 보기 → 확인 → orbit 사본에서 삭제, 문서 원장은 확인 뒤 현재 파일에서 고친다. git 이력·Claude Code 원본 세션 기록·자동 기억은 orbit이 지우지 못한다.
-- 조절: `ORBIT_FOUND_MIN_TOOLS`(도구를 이만큼 쓴 턴에 '발견' 칸이 비면 알림, 기본 10, 0이면 끔), `ORBIT_READ_OUTLINE_MIN_LINES`(큰 파일 개요 안내 기준, 기본 300, 0이면 끔), `ORBIT_CODE_TOOLS_DIR`(코드 도구 위치).
+- 조절: `ORBIT_COMPACT_WORKLOG=off`(컴팩션 직후 worklog를 넣지 않음 — 효과를 재 보는 용도), `ORBIT_FOUND_MIN_TOOLS`(도구를 이만큼 쓴 턴에 '발견' 칸이 비면 알림, 기본 10, 0이면 끔), `ORBIT_READ_OUTLINE_MIN_LINES`(큰 파일 개요 안내 기준, 기본 300, 0이면 끔), `ORBIT_CODE_TOOLS_DIR`(코드 도구 위치).
 
 ## 요구사항
 

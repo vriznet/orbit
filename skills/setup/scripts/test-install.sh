@@ -1310,6 +1310,8 @@ for (let i = 0; i < 12; i += 1) spawnSync(process.execPath, ['scripts/worklog.mj
 fs.utimesSync(stateFile, new Date(), new Date());
 const r3 = run('compact-restore', { session_id: 's52', source: 'compact' });
 ok(r3.status === 0 && r3.stdout.length <= 10000 && r3.stdout.includes('진행 중 요청 원문 52'), `긴 기록도 1만 자 안(${r3.stdout.length})`);
+const off = spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'compact-restore'], { input: JSON.stringify({ session_id: 's52', source: 'compact' }), encoding: 'utf8', env: { ...process.env, ORBIT_COMPACT_WORKLOG: 'off' } });
+ok(off.stdout.includes('진행 중 요청 원문 52') && !off.stdout.includes('컴팩션 전 기록'), 'ORBIT_COMPACT_WORKLOG=off → 상태 파일만(측정 조건 C·D)');
 // PostCompact → 요약 저장만(출력 없음)
 const r4 = run('postcompact', { session_id: 's52', trigger: 'manual', compact_summary: '요약 본문 52' });
 const saved = fs.readdirSync(path.join(ROOT, '.git', 'orbit-state', 'compact')).filter((n) => n.startsWith('s52-summary-'));
