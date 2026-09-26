@@ -253,3 +253,8 @@ export function readTranscriptFrom(file, offset) {
   }
   return { entries, next: offset + lastNewline + 1 };
 }
+
+// 기억 번호: 대화 사본 `d:<세션 앞 8자>:<턴>`, 도구 색인 `t:<세션 앞 8자>:<턴>` (memory.mjs show로 상세).
+export const shortSession = (session) => String(session || '').slice(0, 8);
+export const dialogueId = (record) => `d:${shortSession(record.session)}:${record.seq}`;
+export const toolsId = (record) => `t:${shortSession(record.session)}:${record.seq}`;

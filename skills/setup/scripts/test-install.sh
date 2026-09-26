@@ -1471,8 +1471,17 @@ ok(wiki.indexOf('기억 정리') > -1 && (wiki.indexOf('캐시 조사') === -1 |
 const wl = out.slice(out.indexOf('## worklog'), out.indexOf('## 대화 글 사본'));
 ok(wl.indexOf('기억 캐시 정리') > -1 && wl.indexOf('기억 캐시 정리') < wl.indexOf('캐시 방식 논의') && !wl.includes('날씨'), 'worklog 순위·안 맞는 항목 제외');
 const dl = out.slice(out.indexOf('## 대화 글 사본'));
-ok(dl.includes('(앞 턴)') && dl.includes('앞 턴 질문') && dl.includes('(뒤 턴)') && dl.includes('뒤 턴 질문') && dl.includes('운영 부담'), '대화 사본은 앞뒤 1턴과 함께');
-ok(dl.includes('src/cache.js'), '바뀐 파일(추정) 표시');
+ok(dl.includes('d:sessA:2 ·') && dl.includes('사용자: 그 캐시 기억 방식 왜 버렸지?') && !dl.includes('운영 부담'), '대화 사본은 번호 + 한 줄 발췌만(본문은 show로)');
+ok(out.includes('상세: node scripts/memory.mjs show <번호>'), '상세 보기 안내');
+const show = (...args) => spawnSync(process.execPath, ['scripts/memory.mjs', 'show', ...args], { encoding: 'utf8' });
+const sd = show('d:sessA:2', '--around').stdout;
+ok(sd.includes('(앞 턴)') && sd.includes('앞 턴 질문') && sd.includes('(뒤 턴)') && sd.includes('뒤 턴 질문') && sd.includes('운영 부담'), 'show --around: 앞뒤 1턴과 본문');
+ok(sd.includes('src/cache.js'), 'show: 바뀐 파일(추정)');
+ok(!show('d:sessA:2').stdout.includes('앞 턴 질문'), 'show 기본은 그 턴만');
+ok(wl.includes('#3 ·') && show('#3').stdout.includes('- 결과: 두 낱말 모두'), 'worklog 번호로 항목 전체 보기');
+const multi = show('#1', 'scenario55-docs/wiki/기억-정리.md').stdout;
+ok(multi.includes('캐시 방식 논의') && multi.includes('# 기억 정리'), '여러 번호·파일 경로를 한 번에');
+ok(show('d:nope:9').stdout.includes('그 턴이 없습니다') && show('zzz').stdout.includes('알 수 없는 번호'), '없는 번호 안내');
 ok(run('기억').stdout.includes('## ADR'), '두 글자 한국어 낱말도 찾음');
 ok(run('REDIS').stdout.includes('Redis'), '대소문자 무시');
 const only = run('캐시', '--source', 'worklog').stdout;
@@ -1568,7 +1577,9 @@ ok(recs.find((r) => r.tool === 'Grep')?.pattern === 'TTL_SECONDS' && recs.find((
 ok(!fs.readFileSync(file, 'utf8').includes('FILE-CONTENT-SHOULD-NOT-BE-COPIED'), '도구 출력은 복사하지 않음');
 ok(recs.every((r) => r.session === 's57' && r.seq === 1) && (fs.statSync(file).mode & 0o777) === 0o600, '세션·턴 번호·권한 600');
 const out = spawnSync(process.execPath, ['scripts/memory.mjs', 'search', 'cache.js'], { encoding: 'utf8' }).stdout;
-ok(out.includes('## 도구 활동') && out.includes('Edit src/cache.js'), '검색이 도구 활동을 찾음');
+ok(out.includes('## 도구 활동') && out.includes('t:s57:1 ·'), '검색이 도구 활동을 번호로 찾음');
+const st = spawnSync(process.execPath, ['scripts/memory.mjs', 'show', 't:s57:1'], { encoding: 'utf8' }).stdout;
+ok(st.includes('Edit src/cache.js') && st.includes('Read src/cache.js') && st.includes('[REDACTED]') && st.includes('5회'), 'show t:…로 그 턴의 도구 사용 전부');
 ok(out.indexOf('## 대화 글 사본') === -1 || out.indexOf('## 대화 글 사본') < out.indexOf('## 도구 활동'), '도구 활동은 대화 사본 뒤');
 process.exit(failed ? 1 : 0);
 NODE

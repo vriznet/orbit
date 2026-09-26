@@ -4,6 +4,7 @@
 //
 // 명령:
 //   search "<검색어>" [--limit N] [--source adr,wiki,worklog,dialogue,tools] [--json]
+//   show <번호…> [--around]    검색 결과·파일 주입 목록의 번호로 상세를 본다
 //   forget "<문구>" [--apply]   /forget 스킬이 부른다. 기본은 미리 보기, --apply면 orbit 사본에서 지운다
 //
 // 순위: 서로 다른 검색어가 몇 개 맞았는지 → 최근성. 같은 낱말이 여러 번 나오는 긴 글이
@@ -13,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { clip, git, sharedMemoryDir, withLock, writePrivateFile } from './memory-lib.mjs';
+import { clip, dialogueId, git, sharedMemoryDir, toolsId, withLock, writePrivateFile } from './memory-lib.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DOCS = path.join(ROOT, '{{DOCS_DIR}}');
@@ -23,7 +24,7 @@ const OUTPUT_LIMIT = 12000;
 const SNIPPET_LINES = 3;
 const LINE_LIMIT = 220;
 const TURN_LIMIT = 900;
-const NEIGHBOR_LIMIT = 300;
+const SHOW_LIMIT = 12000;
 
 function terms(query) {
   return [...new Set(String(query || '').toLowerCase().split(/\s+/).filter(Boolean))];
@@ -169,35 +170,35 @@ function rank(items) {
     .sort((a, b) => (b.score - a.score) || (Number(Boolean(a.superseded)) - Number(Boolean(b.superseded))) || (b.time - a.time));
 }
 
-function dialogueTurn(record, limit) {
-  const who = [
-    record.user ? `사용자: ${clip(record.user.replace(/\s+/g, ' '), limit)}` : '',
-    record.assistant ? `AI: ${clip(record.assistant.replace(/\s+/g, ' '), limit)}` : '',
-  ].filter(Boolean);
-  return who.join('\n    ');
+// 번호 체계: worklog `#N`(요약은 `#a~b`), 대화 사본 `d:<세션 앞 8자>:<턴>`, 도구 색인 `t:<세션 앞 8자>:<턴>`,
+// ADR·위키는 파일 경로. 검색은 번호 + 한 줄 발췌만 보여 주고, 상세는 `show <번호>`로 본다
+// (목록 먼저, 필요한 것만 상세 — 토큰을 아낀다).
+const when = (at) => String(at || '').slice(0, 16).replace('T', ' ');
+const oneLine = (text, limit) => clip(String(text || '').replace(/\s+/g, ' ').trim(), limit);
+
+function toolLine(r) {
+  return `${r.tool}${r.file ? ` ${r.file}` : ''}${r.command ? ` $ ${clip(r.command, 120)}` : ''}${r.pattern ? ` /${r.pattern}/` : ''}${r.agent ? ` (${r.agent})` : ''}`;
 }
 
 function formatItem(item, total) {
   const mark = `[${item.score}/${total}]`;
   if (item.source === 'adr' || item.source === 'wiki') {
     const flag = item.superseded ? ' (대체됨 — 참고만)' : '';
-    return [`- ${mark} ${item.ref} — ${item.title}${flag}`, ...item.lines.map((line) => `    > ${line}`)].join('\n');
+    const line = item.lines[0] ? `\n    > ${item.lines[0]}` : '';
+    return `- ${mark} ${item.ref} — ${oneLine(item.title, 120)}${flag}${line}`;
   }
-  if (item.source === 'worklog') return `- ${mark} worklog [${item.ref}]\n    ${item.text.replace(/\n/g, '\n    ')}`;
+  if (item.source === 'worklog') {
+    const ask = (item.text.match(/^- 물음: (.*)$/m) || [])[1] || item.text.split('\n')[1] || '';
+    const date = (item.text.match(/\] (\d{4}-\d{2}-\d{2})/) || [])[1] || '';
+    return `- ${mark} #${item.ref.replace(/^요약 #/, '')} · ${date} · ${oneLine(ask, 150)}`;
+  }
   if (item.source === 'tools') {
     const first = item.records[0];
-    const head = `- ${mark} ${String(first.at || '').slice(0, 16).replace('T', ' ')} · 세션 ${String(first.session || '').slice(0, 8)} · 턴 ${first.seq}${first.worklog ? ` · worklog #${first.worklog}` : ''} · 도구 ${item.records.length}회`;
-    const lines = (item.hits.length ? item.hits : item.records).slice(0, 5)
-      .map((r) => `    ${r.tool}${r.file ? ` ${r.file}` : ''}${r.command ? ` $ ${clip(r.command, 160)}` : ''}${r.pattern ? ` /${r.pattern}/` : ''}${r.agent ? ` (${r.agent})` : ''}`);
-    return [head, ...lines].join('\n');
+    const hit = (item.hits[0] || first);
+    return `- ${mark} ${toolsId(first)} · ${when(first.at)} · 도구 ${item.records.length}회${first.worklog ? ` · worklog #${first.worklog}` : ''} · ${oneLine(toolLine(hit), 140)}`;
   }
   const r = item.record;
-  const head = `- ${mark} ${String(r.at || '').slice(0, 16).replace('T', ' ')} · 세션 ${String(r.session || '').slice(0, 8)} · ${path.basename(String(r.worktree || ''))}${r.worklog ? ` · worklog #${r.worklog}` : ''}${r.files?.length ? ` · 바뀐 파일(추정) ${r.files.slice(0, 5).join(', ')}` : ''}`;
-  const parts = [head];
-  if (item.before) parts.push(`  (앞 턴) ${dialogueTurn(item.before, NEIGHBOR_LIMIT)}`);
-  parts.push(`  ▶ ${dialogueTurn(r, TURN_LIMIT)}`);
-  if (item.after) parts.push(`  (뒤 턴) ${dialogueTurn(item.after, NEIGHBOR_LIMIT)}`);
-  return parts.join('\n');
+  return `- ${mark} ${dialogueId(r)} · ${when(r.at)} · ${path.basename(String(r.worktree || ''))}${r.worklog ? ` · worklog #${r.worklog}` : ''} · 사용자: ${oneLine(r.user, 110)}`;
 }
 
 function search(query, { limit = 5, sources = SOURCES, json = false } = {}) {
@@ -217,8 +218,62 @@ function search(query, { limit = 5, sources = SOURCES, json = false } = {}) {
     for (const item of group.items) out.push(formatItem(item, words.length));
   }
   if (!found) out.push('', '찾은 것이 없습니다. 낱말을 바꾸거나 줄여 다시 찾아 보세요.');
+  else out.push('', '상세: node scripts/memory.mjs show <번호> [--around] — 번호는 #N(worklog)·d:…(대화 사본)·t:…(도구 활동)·파일 경로');
   let text = out.join('\n');
   if (text.length > OUTPUT_LIMIT) text = `${text.slice(0, OUTPUT_LIMIT - 60)}\n…(출력 상한 ${OUTPUT_LIMIT}자에서 자름 — --limit를 줄이세요)`;
+  process.stdout.write(`${text}\n`);
+}
+
+// ── show: 번호로 상세 보기 ────────────────────────────────────────────────────────
+function showWorklog(ref) {
+  const file = path.join(DOCS, 'worklog.md');
+  if (!fs.existsSync(file)) return null;
+  const header = ref.includes('~') ? `## [요약 #${ref}]` : `## [#${ref}]`;
+  const block = fs.readFileSync(file, 'utf8').split(/\n(?=## \[)/).find((b) => b.startsWith(header));
+  return block ? block.trim() : null;
+}
+
+function formatDialogue(record, label) {
+  const meta = [when(record.at), `세션 ${record.session}`, path.basename(String(record.worktree || '')),
+    record.worklog ? `worklog #${record.worklog}` : '', record.files?.length ? `바뀐 파일(추정): ${record.files.join(', ')}` : '']
+    .filter(Boolean).join(' · ');
+  return [`### ${label} ${dialogueId(record)}`, meta, '', `사용자: ${record.user || '(없음)'}`, '', `AI: ${record.assistant || '(없음)'}`].join('\n');
+}
+
+function showItem(id, { around = false } = {}) {
+  let match = id.match(/^#(\d+(?:~\d+)?)$/);
+  if (match) return showWorklog(match[1]) || `${id}: worklog에 그 항목이 없습니다.`;
+  match = id.match(/^([dt]):([^:]+):(\d+)$/);
+  if (match) {
+    const [, kind, prefix, seq] = match;
+    const records = readShared(kind === 'd' ? 'dialogue.jsonl' : 'tools.jsonl');
+    const same = (r) => String(r.session || '').startsWith(prefix);
+    if (kind === 't') {
+      const turn = records.filter((r) => same(r) && String(r.seq) === seq);
+      if (!turn.length) return `${id}: 도구 색인에 그 턴이 없습니다.`;
+      return [`### 도구 활동 ${id} · ${when(turn[0].at)}${turn[0].worklog ? ` · worklog #${turn[0].worklog}` : ''} · ${turn.length}회`, ...turn.map((r) => `- ${toolLine(r)}`)].join('\n');
+    }
+    const session = records.filter(same);
+    const index = session.findIndex((r) => String(r.seq) === seq);
+    if (index === -1) return `${id}: 대화 사본에 그 턴이 없습니다.`;
+    const parts = [];
+    if (around && session[index - 1]) parts.push(formatDialogue(session[index - 1], '(앞 턴)'));
+    parts.push(formatDialogue(session[index], '▶'));
+    if (around && session[index + 1]) parts.push(formatDialogue(session[index + 1], '(뒤 턴)'));
+    return parts.join('\n\n');
+  }
+  const file = path.resolve(ROOT, id);
+  if (file.startsWith(path.resolve(ROOT)) && fs.existsSync(file) && fs.statSync(file).isFile()) {
+    const lines = fs.readFileSync(file, 'utf8').split('\n');
+    return [`### ${path.relative(ROOT, file)}`, ...lines.slice(0, 300), lines.length > 300 ? `…(앞 300줄만 — 나머지는 Read로)` : ''].join('\n');
+  }
+  return `${id}: 알 수 없는 번호입니다. #N · d:<세션>:<턴> · t:<세션>:<턴> · 저장소 안 파일 경로를 씁니다.`;
+}
+
+function show(ids, options) {
+  if (!ids.length) throw new Error('볼 번호가 없습니다.');
+  let text = ids.map((id) => showItem(id, options)).join('\n\n---\n\n');
+  if (text.length > SHOW_LIMIT) text = `${text.slice(0, SHOW_LIMIT - 60)}\n…(출력 상한 ${SHOW_LIMIT}자에서 자름)`;
   process.stdout.write(`${text}\n`);
 }
 
@@ -330,6 +385,8 @@ const json = argv.includes('--json');
 if (json) argv.splice(argv.indexOf('--json'), 1);
 const applyFlag = argv.includes('--apply');
 if (applyFlag) argv.splice(argv.indexOf('--apply'), 1);
+const aroundFlag = argv.includes('--around');
+if (aroundFlag) argv.splice(argv.indexOf('--around'), 1);
 const limitArg = takeOption(argv, '--limit');
 const sourceArg = takeOption(argv, '--source');
 const [command, ...rest] = argv;
@@ -339,10 +396,12 @@ try {
     if (!sources.length) throw new Error(`--source는 ${SOURCES.join(',')} 가운데서 고릅니다.`);
     const limit = limitArg ? Math.max(1, Math.min(20, Number(limitArg) || 5)) : 5;
     search(rest.join(' '), { limit, sources, json });
+  } else if (command === 'show') {
+    show(rest, { around: aroundFlag });
   } else if (command === 'forget') {
     forget(rest.join(' '), { apply: applyFlag });
   } else {
-    process.stderr.write('사용법: memory.mjs search "<검색어>" [--limit N] [--source adr,wiki,worklog,dialogue,tools] [--json]\n       memory.mjs forget "<문구>" [--apply]\n');
+    process.stderr.write('사용법: memory.mjs search "<검색어>" [--limit N] [--source adr,wiki,worklog,dialogue,tools] [--json]\n       memory.mjs show <번호…> [--around]\n       memory.mjs forget "<문구>" [--apply]\n');
     process.exit(1);
   }
 } catch (error) {
