@@ -1379,6 +1379,63 @@ NODE
 echo "${S53_OUT}"
 [ "${S53_RC}" = "0" ] || fail "시나리오 53 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 54: 대화 글 사본(턴 끝 덧붙이기·가림·바뀐 파일·워크트리 공유) =="
+R54="$WORK/scenario54"
+new_repo "$R54"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R54" --project-name "Scenario54" --slug scenario54 --mode new >/dev/null 2>&1
+(cd "$R54" && git add -A && git -c user.email=t@t -c user.name=t commit -qm init && git worktree add -q "$WORK/wt54" -b wt54 2>/dev/null)
+grep -q 'memory-hook.mjs\\" turn-start' "$R54/.claude/settings.json" && grep -q 'memory-hook.mjs\\" stop' "$R54/.claude/settings.json" && pass "turn-start·stop 배선" || fail "사본 훅 배선 없음"
+S54_OUT="$(cd "$R54" && WT54="$WORK/wt54" node - <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd();
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const hook = (cwd, mode, input) => spawnSync(process.execPath, [path.join(cwd, 'scripts', 'memory-hook.mjs'), mode], { cwd, input: JSON.stringify(input), encoding: 'utf8' });
+const u = (text, promptId) => ({ type: 'user', promptId, message: { role: 'user', content: text } });
+const a = (text, promptId) => ({ type: 'assistant', promptId, message: { role: 'assistant', content: [{ type: 'text', text }] } });
+const T = path.join(ROOT, '..', 't54.jsonl');
+const write = (lines) => fs.appendFileSync(T, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+const key = 'sk-' + 'abcdef0123456789'.repeat(2);
+const DIALOGUE = path.join(ROOT, '.git', 'orbit-memory', 'dialogue.jsonl');
+const records = () => (fs.existsSync(DIALOGUE) ? fs.readFileSync(DIALOGUE, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : []);
+write([u('설치 전 옛 요청', 'p1'), a('옛 답변', 'p1'), u(`지금 요청: 키는 ${key}`, 'p2'), a('중간 답변 글', 'p2')]);
+hook(ROOT, 'turn-start', { session_id: 's54', prompt: '지금 요청' });
+fs.mkdirSync(path.join(ROOT, 'src'), { recursive: true }); fs.writeFileSync(path.join(ROOT, 'src', 'b.txt'), 'bash로 만든 파일');
+const r1 = hook(ROOT, 'stop', { session_id: 's54', transcript_path: T, last_assistant_message: '최종 답변 A' });
+ok(r1.status === 0 && r1.stdout === '', `stop 종료 코드 0·출력 없음 (${r1.status} ${r1.stderr.trim()})`);
+let recs = records();
+ok(recs.length === 1, `턴 기록 1줄(${recs.length})`);
+ok(recs[0]?.user.includes('지금 요청') && !JSON.stringify(recs).includes('설치 전 옛 요청'), '앞으로의 대화만(처음 보는 세션은 지금 턴부터)');
+ok(recs[0]?.assistant.includes('중간 답변 글') && recs[0]?.assistant.includes('최종 답변 A'), '중간 답변과 마지막 답변');
+ok(!JSON.stringify(recs).includes(key) && recs[0]?.user.includes('[REDACTED]'), '비밀값 가림');
+ok(recs[0]?.files.includes('src/b.txt') && recs[0]?.filesEstimated === true, 'Bash로 만든 파일도 바뀐 파일로(추정 표시)');
+ok((fs.statSync(DIALOGUE).mode & 0o777) === 0o600 && (fs.statSync(path.dirname(DIALOGUE)).mode & 0o777) === 0o700, '파일 600·폴더 700');
+ok(!spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' }).stdout.includes('orbit-memory'), 'git이 추적하지 않음');
+// 다음 턴: 마지막 답변이 뒤늦게 기록에 들어와도 두 번 담지 않는다. worklog 번호도 잇는다.
+write([a('최종 답변 A', 'p2'), u('다음 요청', 'p3'), a('다음 답변', 'p3')]);
+fs.mkdirSync(path.join(ROOT, '.git', 'orbit-state', 'worklog'), { recursive: true });
+fs.writeFileSync(path.join(ROOT, '.git', 'orbit-state', 'worklog', 's54.json'), JSON.stringify({ sessionId: 's54', counter: 2, pending: null, orphans: [], notices: [], entry: 7 }));
+hook(ROOT, 'turn-start', { session_id: 's54', prompt: '다음 요청' });
+hook(ROOT, 'stop', { session_id: 's54', transcript_path: T, last_assistant_message: '다음 답변' });
+recs = records();
+ok(recs.length === 2 && recs[1].user === '다음 요청' && recs[1].assistant === '다음 답변', `다음 턴 기록·마지막 답변 중복 없음 (${JSON.stringify(recs[1]?.assistant)})`);
+ok(recs[1]?.worklog === 7 && recs[1]?.files.length === 0, 'worklog 번호 연결·바뀐 파일 없음');
+hook(ROOT, 'stop', { session_id: 's54', transcript_path: T, last_assistant_message: '다음 답변' });
+ok(records().length === 2, '새 글이 없으면 덧붙이지 않음');
+ok(hook(ROOT, 'turn-start', { session_id: 's54', prompt: '<task-notification>\n<task-id>x</task-id>\n</task-notification>' }).status === 0, '알림은 턴 시작 지문을 바꾸지 않음');
+// 워크트리에서 쓴 기록도 같은 사본에 모인다
+const WT = process.env.WT54; const T2 = path.join(ROOT, '..', 't54w.jsonl');
+fs.writeFileSync(T2, [u('워크트리 요청', 'w1'), a('워크트리 답변', 'w1')].map((l) => JSON.stringify(l)).join('\n') + '\n');
+const rw = hook(WT, 'stop', { session_id: 's54w', transcript_path: T2 });
+recs = records();
+// WT 경로는 macOS에서 /var(→/private/var) 심볼릭 링크를 거친다 — 직접 실행 판정이 실제 경로로 비교되는지도 함께 본다.
+ok(rw.status === 0 && recs.length === 3 && recs[2].user === '워크트리 요청' && fs.realpathSync(recs[2].worktree) === fs.realpathSync(WT), '워크트리 기록이 공용 사본에 모임(심볼릭 링크 경로로 실행해도 동작)');
+process.exit(failed ? 1 : 0);
+NODE
+)"; S54_RC=$?
+echo "${S54_OUT}"
+[ "${S54_RC}" = "0" ] || fail "시나리오 54 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

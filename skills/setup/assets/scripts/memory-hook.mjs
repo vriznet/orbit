@@ -3,18 +3,21 @@
 //   precompact       PreCompact: 마지막 worklog 기록 뒤 구간의 원문 조각을 상태 파일로 저장
 //   compact-restore  SessionStart(compact): 상태 파일 + worklog 최근 기록(컴팩션 전 기록)을 주입
 //   postcompact      PostCompact: 컴팩션 요약을 저장만 한다(측정·점검용, 주입 안 함)
+//   turn-start       UserPromptSubmit: 턴 시작 git 상태 지문(바뀐 파일 추정용)
+//   stop             Stop: 이번 턴의 사람·AI 글을 가려 대화 글 사본에 덧붙인다(결정 6)
 // 결정: D-프로젝트-기억-분담(결정 3). 실패해도 컴팩션을 막지 않는다(종료 코드 2를 쓰지 않음).
 
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
-  WRITE_TOOLS, clip, git, isHumanPrompt, isNotification, lastMarks, lastTodos, readHookInput,
-  readTranscript, runningBackgroundTasks, safeName, textOf, toolFilePath, toolUses, worktreeStateDir,
-  writePrivateFile,
+  WRITE_TOOLS, changedSince, clip, ensurePrivateDir, git, gitSnapshot, isHumanPrompt, isNotification, lastMarks,
+  lastTodos, readHookInput, readTranscript, readTranscriptFrom, runningBackgroundTasks, safeName, sharedMemoryDir,
+  textOf, toolFilePath, toolUses, withLock, worktreeStateDir, writePrivateFile,
 } from './memory-lib.mjs';
-import { redact } from './redact.mjs';
+import { redact, redactPrefix } from './redact.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const STATE_LIMIT = 8000; // SessionStart 주입 상한(1만 자) 안에 recent와 함께 들어가도록
@@ -156,9 +159,120 @@ function postcompact(input) {
   writePrivateFile(path.join(dir, `${prefix}${stamp}.md`), `# 컴팩션 요약 (${input.trigger || '알 수 없음'}, ${new Date().toISOString()})\n\n${redact(summary)}\n`);
 }
 
-const MODES = { precompact, 'compact-restore': compactRestore, postcompact };
+// ── 대화 글 사본 ──────────────────────────────────────────────────────────────
+// `<git common dir>/orbit-memory/dialogue.jsonl`: 턴마다 한 줄. 워크트리끼리 공유하고 git이
+// 추적하지 않는다(폴더 700·파일 600). Claude Code가 원본 세션 기록을 지워도 남는다.
+// 앞으로의 대화만 쌓는다 — 처음 보는 세션은 지금 턴부터. 자동 삭제는 없다(지우기는 "잊어 줘").
+const TEXT_LIMIT = 20000;
 
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+function snapshotPath(sessionId) {
+  const dir = worktreeStateDir(ROOT, 'memory');
+  return dir ? path.join(dir, `${safeName(sessionId)}.snapshot.json`) : null;
+}
+
+function turnStart(input) {
+  if (isNotification(String(input.prompt || ''))) return; // 알림은 사용자 턴이 아니다
+  const file = snapshotPath(input.session_id);
+  if (file) writePrivateFile(file, `${JSON.stringify({ at: new Date().toISOString(), ...gitSnapshot(ROOT) })}\n`);
+}
+
+function readJson(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+function worklogEntry(sessionId) {
+  const dir = worktreeStateDir(ROOT, 'worklog');
+  const state = dir ? readJson(path.join(dir, `${safeName(sessionId)}.json`)) : null;
+  return state && !state.pending && Number.isFinite(state.entry) ? state.entry : null;
+}
+
+const digest = (text) => crypto.createHash('sha256').update(String(text)).digest('hex').slice(0, 16);
+
+function stop(input) {
+  const shared = sharedMemoryDir(ROOT);
+  if (!shared || !input.transcript_path) return;
+  ensurePrivateDir(shared);
+  withLock(path.join(shared, '.lock'), () => {
+    const cursorsFile = path.join(shared, 'cursors.json');
+    const cursors = readJson(cursorsFile) || {};
+    const key = safeName(input.session_id);
+    const cursor = cursors[key] || null;
+    let { entries, next } = readTranscriptFrom(input.transcript_path, cursor?.offset ?? 0);
+    if (!cursor) {
+      // 처음 보는 세션: 지금 턴(마지막 사람 입력)부터만 담는다.
+      let start = entries.length;
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        if (isHumanPrompt(entries[index]) && !isNotification(textOf(entries[index]))) { start = index; break; }
+      }
+      entries = entries.slice(start);
+    }
+    entries = entries.filter((entry) => !entry?.isSidechain);
+
+    const user = [];
+    const assistant = [];
+    const promptIds = new Set();
+    let skippedLast = false;
+    for (const entry of entries) {
+      if (entry?.promptId) promptIds.add(entry.promptId);
+      if (isHumanPrompt(entry)) {
+        const text = textOf(entry).trim();
+        if (!isNotification(text)) user.push(text);
+      } else if (entry?.type === 'assistant') {
+        const text = textOf(entry).trim();
+        if (!text) continue;
+        // 지난번에 last_assistant_message로 먼저 담은 글이면 한 번 건너뛴다.
+        if (!skippedLast && cursor?.pendingLast && digest(text) === cursor.pendingLast) { skippedLast = true; continue; }
+        assistant.push(text);
+      }
+    }
+    // 마지막 답변이 아직 세션 기록에 안 들어왔으면 Stop 입력으로 먼저 담는다. 이미 담은 답변이면 건너뛴다.
+    let pendingLast = null;
+    const last = String(input.last_assistant_message || '').trim();
+    if (last && !assistant.includes(last) && digest(last) !== cursor?.lastFinal) { assistant.push(last); pendingLast = digest(last); }
+    const lastFinal = last && (assistant.includes(last)) ? digest(last) : cursor?.lastFinal || null;
+
+    const seq = (cursor?.seq || 0) + (user.length || assistant.length ? 1 : 0);
+    const entry = worklogEntry(input.session_id);
+    if (user.length || assistant.length) {
+      const record = {
+        v: 1,
+        at: new Date().toISOString(),
+        session: String(input.session_id || ''),
+        worktree: ROOT.replace(/\/$/, ''),
+        seq,
+        promptIds: [...promptIds],
+        continued: user.length === 0,
+        user: redactPrefix(user.join('\n\n'), TEXT_LIMIT),
+        assistant: redactPrefix(assistant.join('\n\n'), TEXT_LIMIT),
+        files: changedSince(ROOT, readJson(snapshotPath(input.session_id))),
+        filesEstimated: true,
+        worklog: entry !== null && entry !== cursor?.lastEntry ? entry : null,
+      };
+      const dialogue = path.join(shared, 'dialogue.jsonl');
+      fs.appendFileSync(dialogue, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+      try { fs.chmodSync(dialogue, 0o600); } catch {}
+    }
+    cursors[key] = {
+      offset: next,
+      seq,
+      lastEntry: entry ?? cursor?.lastEntry ?? null,
+      pendingLast: pendingLast || (skippedLast ? null : cursor?.pendingLast || null),
+      lastFinal,
+      transcript: input.transcript_path,
+      updatedAt: new Date().toISOString(),
+    };
+    writePrivateFile(cursorsFile, `${JSON.stringify(cursors)}\n`);
+  });
+}
+
+const MODES = { precompact, 'compact-restore': compactRestore, postcompact, 'turn-start': turnStart, stop };
+
+// 직접 실행됐는지는 실제 경로로 가린다. 심볼릭 링크를 거친 경로(/var → /private/var, 링크로 연
+// 프로젝트 폴더)로 부르면 문자열이 달라 훅이 아무 일도 안 하고 끝나던 결함을 막는다.
+function realPath(file) {
+  try { return fs.realpathSync(file); } catch { return path.resolve(file); }
+}
+const isMain = Boolean(process.argv[1]) && realPath(process.argv[1]) === realPath(fileURLToPath(import.meta.url));
 if (isMain) {
   const mode = process.argv[2];
   if (!MODES[mode]) {

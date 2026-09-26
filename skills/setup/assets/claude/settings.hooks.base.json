@@ -56,6 +56,19 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/memory-hook.mjs\" turn-start"
+            ],
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -98,6 +111,19 @@
               "node \"$CLAUDE_PROJECT_DIR/scripts/worklog-hook.mjs\" stop"
             ],
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/memory-hook.mjs\" stop"
+            ],
+            "timeout": 30
           }
         ]
       }

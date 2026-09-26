@@ -172,3 +172,84 @@ export function clip(text, limit) {
   const value = String(text ?? '');
   return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
 }
+
+// 같은 파일을 여러 세션(워크트리)이 함께 고칠 때 쓰는 단순 잠금(mkdir). 오래된 잠금은 치운다.
+export function withLock(lockDir, fn, { timeoutMs = 5000, staleMs = 30000 } = {}) {
+  const started = Date.now();
+  for (;;) {
+    try {
+      fs.mkdirSync(lockDir);
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - fs.statSync(lockDir).mtimeMs > staleMs) { fs.rmSync(lockDir, { recursive: true, force: true }); continue; }
+      } catch {}
+      if (Date.now() - started > timeoutMs) throw new Error(`잠금을 얻지 못했습니다: ${lockDir}`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+  try { return fn(); } finally { try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch {} }
+}
+
+// git 상태 지문: HEAD와, 커밋되지 않은 파일마다 내용 해시(지워진 파일은 'deleted').
+// 턴 시작과 끝을 비교해 "이 턴에 바뀐 파일"을 추정한다. Bash로 고친 파일도 잡힌다.
+const SNAPSHOT_MAX_FILES = 500;
+export function gitSnapshot(root) {
+  const head = git(root, ['rev-parse', '--verify', '-q', 'HEAD']) || '';
+  const raw = git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const dirty = {};
+  if (raw) {
+    const fields = raw.split('\0').filter(Boolean);
+    const paths = [];
+    for (let index = 0; index < fields.length; index += 1) {
+      const code = fields[index].slice(0, 2);
+      paths.push(fields[index].slice(3));
+      if (code[0] === 'R' || code[0] === 'C') index += 1; // 이름 바꾸기는 옛 경로가 한 칸 더 온다
+    }
+    const existing = [];
+    for (const rel of paths.slice(0, SNAPSHOT_MAX_FILES)) {
+      if (fs.existsSync(path.join(root, rel)) && fs.statSync(path.join(root, rel)).isFile()) existing.push(rel);
+      else dirty[rel] = 'deleted';
+    }
+    if (existing.length) {
+      try {
+        const hashes = execFileSync('git', ['hash-object', '--stdin-paths'], { cwd: root, input: existing.join('\n'), encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] })
+          .trim().split('\n');
+        existing.forEach((rel, index) => { dirty[rel] = hashes[index] || 'unknown'; });
+      } catch {}
+    }
+  }
+  return { head, dirty };
+}
+
+export function changedSince(root, before) {
+  if (!before) return [];
+  const after = gitSnapshot(root);
+  const changed = new Set();
+  if (before.head && after.head && before.head !== after.head) {
+    const names = git(root, ['diff', '--name-only', before.head, after.head]);
+    for (const name of (names || '').split('\n').filter(Boolean)) changed.add(name);
+  }
+  for (const [rel, hash] of Object.entries(after.dirty)) if (before.dirty?.[rel] !== hash) changed.add(rel);
+  return [...changed].sort();
+}
+
+// 세션 기록을 offset부터 읽어 완성된 줄만 돌려준다(쓰는 중인 마지막 줄은 다음에).
+export function readTranscriptFrom(file, offset) {
+  if (!file || !fs.existsSync(file)) return { entries: [], next: offset };
+  const size = fs.statSync(file).size;
+  if (size < offset) offset = 0; // 파일이 바뀌었으면 처음부터
+  if (size === offset) return { entries: [], next: offset };
+  const buffer = Buffer.alloc(size - offset);
+  const fd = fs.openSync(file, 'r');
+  try { fs.readSync(fd, buffer, 0, buffer.length, offset); } finally { fs.closeSync(fd); }
+  const lastNewline = buffer.lastIndexOf(0x0a);
+  if (lastNewline === -1) return { entries: [], next: offset };
+  const entries = [];
+  for (const line of buffer.subarray(0, lastNewline).toString('utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try { entries.push(JSON.parse(line)); } catch {}
+  }
+  return { entries, next: offset + lastNewline + 1 };
+}
