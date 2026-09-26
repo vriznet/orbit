@@ -1491,6 +1491,47 @@ NODE
 echo "${S55_OUT}"
 [ "${S55_RC}" = "0" ] || fail "시나리오 55 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 56: /forget 스킬과 memory.mjs forget =="
+R56="$WORK/scenario56"
+new_repo "$R56"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R56" --project-name "Scenario56" --slug scenario56 --mode new >/dev/null 2>&1
+SK56="$R56/.claude/skills/forget/SKILL.md"
+[ -f "$SK56" ] && grep -q '^disable-model-invocation: true' "$SK56" && grep -q '^argument-hint:' "$SK56" && grep -q '\$ARGUMENTS' "$SK56" && pass "/forget 스킬 설치(모델 자동 호출 끔·인자)" || fail "/forget 스킬 설정 오류"
+grep -q '/forget <문구>' "$R56/CLAUDE.md" && pass "CLAUDE.md가 /forget을 안내" || fail "CLAUDE.md /forget 안내 없음"
+(cd "$R56" && git add -A && git -c user.email=t@t -c user.name=t commit -qm init)
+S56_OUT="$(cd "$R56" && node - <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const mem = path.join('.git', 'orbit-memory'); fs.mkdirSync(mem, { recursive: true });
+const rec = (seq, user) => JSON.stringify({ v: 1, at: '2026-09-26T00:00:00Z', session: 's', worktree: '.', seq, user, assistant: '답', files: [] });
+fs.writeFileSync(path.join(mem, 'dialogue.jsonl'), [rec(1, '평범한 이야기'), rec(2, '비밀 프로젝트 X는 3월 출시'), rec(3, '또 평범')].join('\n') + '\n');
+fs.writeFileSync(path.join(mem, 'tools.jsonl'), [JSON.stringify({ tool: 'Bash', command: 'echo 비밀 프로젝트 x 준비' }), JSON.stringify({ tool: 'Read', file: 'a.js' })].join('\n') + '\n');
+const cdir = path.join('.git', 'orbit-state', 'compact'); fs.mkdirSync(cdir, { recursive: true });
+fs.writeFileSync(path.join(cdir, 's.md'), '상태: 비밀 프로젝트 X 진행 중');
+fs.writeFileSync(path.join(cdir, 's-summary-1.md'), '관계없는 요약');
+spawnSync(process.execPath, ['scripts/worklog.mjs', 'append', 'claude', '비밀 프로젝트 X 일정', '정리']);
+const run = (...args) => spawnSync(process.execPath, ['scripts/memory.mjs', 'forget', ...args], { encoding: 'utf8' });
+const before = fs.readFileSync(path.join(mem, 'dialogue.jsonl'), 'utf8');
+const pv = run('비밀 프로젝트 X');
+ok(pv.status === 0 && pv.stdout.includes('미리 보기') && pv.stdout.includes('dialogue.jsonl: 1/3줄') && pv.stdout.includes('tools.jsonl: 1/2줄'), '미리 보기: 곳별 찾은 수(대소문자 무시)');
+ok(fs.readFileSync(path.join(mem, 'dialogue.jsonl'), 'utf8') === before && fs.existsSync(path.join(cdir, 's.md')), '미리 보기는 아무것도 지우지 않음');
+ok(pv.stdout.includes('scenario56-docs/worklog.md:'), '원장 파일:줄 알림');
+const ap = run('비밀 프로젝트 X', '--apply');
+const after = fs.readFileSync(path.join(mem, 'dialogue.jsonl'), 'utf8');
+ok(ap.status === 0 && !after.includes('비밀 프로젝트') && after.trim().split('\n').length === 2, '대화 사본에서 해당 줄 통째 삭제');
+ok(!fs.readFileSync(path.join(mem, 'tools.jsonl'), 'utf8').toLowerCase().includes('비밀 프로젝트 x'), '도구 색인에서 삭제');
+ok(!fs.existsSync(path.join(cdir, 's.md')) && fs.existsSync(path.join(cdir, 's-summary-1.md')), '문구 든 컴팩션 파일만 삭제');
+ok(fs.readFileSync('scenario56-docs/worklog.md', 'utf8').includes('비밀 프로젝트 X'), '추적되는 원장은 자동으로 고치지 않음');
+ok(ap.stdout.includes('git 이력') && ap.stdout.includes('원본 세션 기록') && ap.stdout.includes('자동 기억'), '지우지 못하는 곳 안내');
+ok((fs.statSync(path.join(mem, 'dialogue.jsonl')).mode & 0o777) === 0o600, '다시 쓴 사본 권한 600');
+ok(run('X').status === 1, '한 글자 문구 거부');
+process.exit(failed ? 1 : 0);
+NODE
+)"; S56_RC=$?
+echo "${S56_OUT}"
+[ "${S56_RC}" = "0" ] || fail "시나리오 56 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

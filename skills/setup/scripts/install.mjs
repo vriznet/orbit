@@ -511,6 +511,7 @@ for (const [source, destination, legacy] of directAssets) {
 addAssetTree('docs', docsRoot, 'legacy/docs', true);
 addAssetTree('claude/skills/decision-context', path.join(repo, '.claude/skills/decision-context'));
 addAssetTree('claude/skills/worktree-merge', path.join(repo, '.claude/skills/worktree-merge'));
+addAssetTree('claude/skills/forget', path.join(repo, '.claude/skills/forget'));
 addFile(
   path.join(ASSETS, 'claude/agents/context-reader.md'),
   path.join(repo, '.claude/agents/context-reader.md'),

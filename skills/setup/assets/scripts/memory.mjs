@@ -4,6 +4,7 @@
 //
 // 명령:
 //   search "<검색어>" [--limit N] [--source adr,wiki,worklog,dialogue] [--json]
+//   forget "<문구>" [--apply]   /forget 스킬이 부른다. 기본은 미리 보기, --apply면 orbit 사본에서 지운다
 //
 // 순위: 서로 다른 검색어가 몇 개 맞았는지 → 최근성. 같은 낱말이 여러 번 나오는 긴 글이
 // 유리해지지 않게 횟수는 세지 않는다. 결과는 출처별로 ADR → 위키 → worklog → 대화 글 사본
@@ -12,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { clip, sharedMemoryDir } from './memory-lib.mjs';
+import { clip, git, sharedMemoryDir, withLock, writePrivateFile } from './memory-lib.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DOCS = path.join(ROOT, '{{DOCS_DIR}}');
@@ -193,6 +194,101 @@ function search(query, { limit = 5, sources = SOURCES, json = false } = {}) {
   process.stdout.write(`${text}\n`);
 }
 
+// ── 잊어 줘(/forget) ────────────────────────────────────────────────────────────
+// orbit이 쌓은 사본(대화 글 사본·도구 색인·컴팩션 상태 파일과 요약)에서 문구가 든 기록을 통째로
+// 지운다. git이 추적하는 원장은 고치지 않고 파일:줄만 알려 준다(스킬이 사용자 확인 뒤 고친다).
+// Claude Code 원본 세션 기록·자동 기억·git 이력은 orbit이 지우지 않는다.
+// 결정: D-잊어줘-슬래시명령(D-프로젝트-기억-분담 결정 6의 진화).
+const JSONL_STORES = ['dialogue.jsonl', 'tools.jsonl'];
+
+function textFields(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(textFields).join('\n');
+  if (value && typeof value === 'object') return Object.values(value).map(textFields).join('\n');
+  return '';
+}
+
+function compactDirs() {
+  const common = git(ROOT, ['rev-parse', '--git-common-dir']);
+  if (!common) return [];
+  const base = path.resolve(ROOT, common);
+  const dirs = [path.join(base, 'orbit-state', 'compact')];
+  const worktrees = path.join(base, 'worktrees');
+  if (fs.existsSync(worktrees)) for (const name of fs.readdirSync(worktrees)) dirs.push(path.join(worktrees, name, 'orbit-state', 'compact'));
+  return dirs.filter((dir) => fs.existsSync(dir));
+}
+
+// 문서 볼트 전체(추적 여부와 관계없이)와 CLAUDE.md·AGENTS.md의 .md·.json 파일을 훑는다.
+function ledgerFiles(dir = DOCS, out = []) {
+  if (!fs.existsSync(dir)) return out;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) ledgerFiles(full, out);
+    else if (/\.(md|json)$/.test(entry.name)) out.push(path.relative(ROOT, full));
+  }
+  return out;
+}
+
+function ledgerHits(needle) {
+  const hits = [];
+  for (const rel of [...ledgerFiles(), 'CLAUDE.md', 'AGENTS.md']) {
+    let text;
+    try { text = fs.readFileSync(path.join(ROOT, rel), 'utf8'); } catch { continue; }
+    text.split('\n').forEach((line, index) => {
+      if (line.toLowerCase().includes(needle)) hits.push(`${rel}:${index + 1}: ${clip(line.trim(), 160)}`);
+    });
+  }
+  return hits;
+}
+
+function forget(phrase, { apply = false } = {}) {
+  const trimmed = String(phrase || '').trim();
+  if ([...trimmed].length < 2) throw new Error('지울 문구는 두 글자 이상이어야 합니다(너무 짧으면 엉뚱한 기록까지 지웁니다).');
+  const needle = trimmed.toLowerCase();
+  const shared = sharedMemoryDir(ROOT);
+  const report = { phrase: trimmed, apply, stores: [], compact: [], ledgers: ledgerHits(needle) };
+  const work = () => {
+    for (const name of JSONL_STORES) {
+      const file = shared ? path.join(shared, name) : null;
+      if (!file || !fs.existsSync(file)) continue;
+      const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+      const keep = [];
+      const removed = [];
+      for (const line of lines) {
+        let text = line;
+        try { text = textFields(JSON.parse(line)); } catch {}
+        (text.toLowerCase().includes(needle) ? removed : keep).push(line);
+      }
+      report.stores.push({ name, total: lines.length, removed: removed.length });
+      if (apply && removed.length) writePrivateFile(file, keep.length ? `${keep.join('\n')}\n` : '');
+    }
+    for (const dir of compactDirs()) {
+      for (const name of fs.readdirSync(dir)) {
+        const file = path.join(dir, name);
+        if (!fs.statSync(file).isFile() || !fs.readFileSync(file, 'utf8').toLowerCase().includes(needle)) continue;
+        report.compact.push(path.relative(ROOT, file));
+        if (apply) fs.rmSync(file, { force: true });
+      }
+    }
+  };
+  if (shared && fs.existsSync(shared)) withLock(path.join(shared, '.lock'), work);
+  else work();
+
+  const verb = apply ? '지움' : '지울 대상(미리 보기)';
+  const out = [`── 잊어 줘: "${trimmed}" — ${apply ? '적용함' : '미리 보기(아직 아무것도 지우지 않음)'} ──`, '', '## orbit 사본'];
+  for (const store of report.stores) out.push(`- ${store.name}: ${store.removed}/${store.total}줄 ${verb}`);
+  if (!report.stores.length) out.push('- 사본 없음');
+  out.push(`- 컴팩션 상태 파일·요약: ${report.compact.length}개 ${verb}`, ...report.compact.map((file) => `    - ${file}`));
+  out.push('', '## 문서 원장(worklog·ADR·위키·할일·CLAUDE.md — 자동으로 고치지 않음, 확인 뒤 현재 파일에서 고친다)');
+  out.push(...(report.ledgers.length ? report.ledgers.slice(0, 50).map((hit) => `- ${hit}`) : ['- 없음']));
+  if (report.ledgers.length > 50) out.push(`- …외 ${report.ledgers.length - 50}줄`);
+  out.push('', '## orbit이 지우지 못하는 곳',
+    '- git 이력: 원장을 고쳐도 옛 커밋에는 남는다. 이력까지 지울지는 따로 정한다.',
+    '- Claude Code 원본 세션 기록(~/.claude/projects/…의 jsonl)과 자동 기억(MEMORY.md)',
+    '- 지금 대화의 문맥: 컴팩션이나 새 세션 전까지는 남아 있다.');
+  process.stdout.write(`${out.join('\n')}\n`);
+}
+
 function takeOption(argv, name) {
   const index = argv.indexOf(name);
   if (index === -1) return null;
@@ -204,6 +300,8 @@ function takeOption(argv, name) {
 const argv = process.argv.slice(2);
 const json = argv.includes('--json');
 if (json) argv.splice(argv.indexOf('--json'), 1);
+const applyFlag = argv.includes('--apply');
+if (applyFlag) argv.splice(argv.indexOf('--apply'), 1);
 const limitArg = takeOption(argv, '--limit');
 const sourceArg = takeOption(argv, '--source');
 const [command, ...rest] = argv;
@@ -213,8 +311,10 @@ try {
     if (!sources.length) throw new Error(`--source는 ${SOURCES.join(',')} 가운데서 고릅니다.`);
     const limit = limitArg ? Math.max(1, Math.min(20, Number(limitArg) || 5)) : 5;
     search(rest.join(' '), { limit, sources, json });
+  } else if (command === 'forget') {
+    forget(rest.join(' '), { apply: applyFlag });
   } else {
-    process.stderr.write('사용법: memory.mjs search "<검색어>" [--limit N] [--source adr,wiki,worklog,dialogue] [--json]\n');
+    process.stderr.write('사용법: memory.mjs search "<검색어>" [--limit N] [--source adr,wiki,worklog,dialogue] [--json]\n       memory.mjs forget "<문구>" [--apply]\n');
     process.exit(1);
   }
 } catch (error) {
