@@ -2,6 +2,7 @@
   "hooks": {
     "SessionStart": [
       {
+        "matcher": "startup|clear|resume|fork",
         "hooks": [
           {
             "type": "command",
@@ -11,6 +12,20 @@
               "node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" recent claude"
             ],
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/memory-hook.mjs\" compact-restore"
+            ],
+            "timeout": 15
           }
         ]
       }
@@ -98,6 +113,21 @@
               "node \"$CLAUDE_PROJECT_DIR/scripts/memory-hook.mjs\" precompact"
             ],
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/memory-hook.mjs\" postcompact"
+            ],
+            "timeout": 15
           }
         ]
       }

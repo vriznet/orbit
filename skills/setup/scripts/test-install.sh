@@ -1270,6 +1270,70 @@ NODE
 echo "${S51_OUT}"
 [ "${S51_RC}" = "0" ] || fail "시나리오 51 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 52: SessionStart 두 갈래(compact 복원)·PostCompact 저장 =="
+R52="$WORK/scenario52"
+new_repo "$R52"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R52" --project-name "Scenario52" --slug scenario52 --mode new >/dev/null 2>&1
+S52_OUT="$(cd "$R52" && node - <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd();
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const s = JSON.parse(fs.readFileSync('.claude/settings.json', 'utf8'));
+const groups = s.hooks.SessionStart;
+const find = (m) => groups.find((g) => g.matcher === m);
+ok(find('startup|clear|resume|fork')?.hooks.some((h) => /worklog\.mjs\x22 recent claude$/.test(h.args[1])), 'startup·clear·resume·fork → recent');
+ok(find('compact')?.hooks.some((h) => /memory-hook\.mjs\x22 compact-restore$/.test(h.args[1])), 'compact → compact-restore');
+ok(!groups.some((g) => !g.matcher && g.hooks.some((h) => /recent/.test(h.args?.[1] || ''))), 'matcher 없는 recent 배선 없음');
+ok(s.hooks.PostCompact?.[0]?.hooks.some((h) => /memory-hook\.mjs\x22 postcompact$/.test(h.args[1])), 'PostCompact 배선');
+const run = (mode, input) => spawnSync(process.execPath, ['scripts/memory-hook.mjs', mode], { input: JSON.stringify(input), encoding: 'utf8' });
+for (let i = 1; i <= 4; i += 1) spawnSync(process.execPath, ['scripts/worklog.mjs', 'append', 'claude', `물음${i}`, `결과${i}`]);
+// 상태 파일 없음 → worklog 최근 기록만, 머리글은 '컴팩션 전 기록'
+const r0 = run('compact-restore', { session_id: 's52', source: 'compact' });
+ok(r0.status === 0 && r0.stdout.includes('컴팩션 전 기록') && r0.stdout.includes('물음4'), '상태 파일 없으면 worklog만(컴팩션 전 기록)');
+// 상태 파일 있음 → 상태 + worklog
+const T = path.join(ROOT, '..', 't52.jsonl');
+fs.writeFileSync(T, JSON.stringify({ type: 'user', message: { role: 'user', content: '진행 중 요청 원문 52' } }) + '\n');
+run('precompact', { session_id: 's52', transcript_path: T, trigger: 'auto' });
+const r1 = run('compact-restore', { session_id: 's52', source: 'compact' });
+ok(r1.stdout.startsWith('# 컴팩션 전 상태') && r1.stdout.includes('진행 중 요청 원문 52') && r1.stdout.includes('물음4'), '상태 파일 + worklog 함께 주입');
+ok(r1.stdout.length <= 10000, `주입 1만 자 이하(${r1.stdout.length})`);
+// 오래된 상태 파일은 넣지 않음
+const stateFile = path.join(ROOT, '.git', 'orbit-state', 'compact', 's52.md');
+const old = new Date(Date.now() - 2 * 60 * 60 * 1000); fs.utimesSync(stateFile, old, old);
+const r2 = run('compact-restore', { session_id: 's52', source: 'compact' });
+ok(!r2.stdout.includes('진행 중 요청 원문 52') && r2.stdout.includes('물음4'), '오래된 상태 파일은 넣지 않음');
+// 긴 worklog도 상한 안으로
+for (let i = 0; i < 12; i += 1) spawnSync(process.execPath, ['scripts/worklog.mjs', 'append', 'claude', '가'.repeat(900), '나'.repeat(900)]);
+fs.utimesSync(stateFile, new Date(), new Date());
+const r3 = run('compact-restore', { session_id: 's52', source: 'compact' });
+ok(r3.status === 0 && r3.stdout.length <= 10000 && r3.stdout.includes('진행 중 요청 원문 52'), `긴 기록도 1만 자 안(${r3.stdout.length})`);
+// PostCompact → 요약 저장만(출력 없음)
+const r4 = run('postcompact', { session_id: 's52', trigger: 'manual', compact_summary: '요약 본문 52' });
+const saved = fs.readdirSync(path.join(ROOT, '.git', 'orbit-state', 'compact')).filter((n) => n.startsWith('s52-summary-'));
+ok(r4.status === 0 && r4.stdout === '' && saved.length === 1, 'PostCompact 요약 파일 1개·출력 없음');
+const sf = path.join(ROOT, '.git', 'orbit-state', 'compact', saved[0] || 'x');
+ok(saved.length === 1 && fs.readFileSync(sf, 'utf8').includes('요약 본문 52') && (fs.statSync(sf).mode & 0o777) === 0o600, '요약 내용·권한 600');
+process.exit(failed ? 1 : 0);
+NODE
+)"; S52_RC=$?
+echo "${S52_OUT}"
+[ "${S52_RC}" = "0" ] || fail "시나리오 52 하위 항목 실패(위 ❌ 확인)"
+# 옛 배선(matcher 없는 SessionStart recent)에서 update → 두 갈래로 교체, 중복 없음
+R52U="$WORK/scenario52u"; new_repo "$R52U"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R52U" --project-name "Scenario52U" --slug scenario52u --mode new >/dev/null 2>&1
+node -e '
+const fs=require("fs");const f=process.argv[1];const s=JSON.parse(fs.readFileSync(f,"utf8"));
+s.hooks.SessionStart=[{hooks:[{type:"command",command:"bash",args:["-c","node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" recent claude 2>/dev/null || true"],timeout:10}]}];
+delete s.hooks.PreCompact; delete s.hooks.PostCompact; fs.writeFileSync(f,JSON.stringify(s,null,2));
+' "$R52U/.claude/settings.json"
+node "$SKILL_DIR/scripts/install.mjs" update --repo "$R52U" >/dev/null 2>&1
+node -e '
+const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+const ss=s.hooks.SessionStart; const recents=ss.flatMap(g=>g.hooks).filter(h=>/recent claude/.test(h.args?.[1]||""));
+process.exit(ss.length===2 && recents.length===1 && s.hooks.PreCompact && s.hooks.PostCompact ? 0 : 1);
+' "$R52U/.claude/settings.json" && pass "옛 SessionStart 배선 → 두 갈래로 교체(중복 없음)" || fail "옛 배선 교체 실패"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

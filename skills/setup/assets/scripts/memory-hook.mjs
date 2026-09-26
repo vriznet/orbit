@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 // 기억 훅 — 컴팩션 전후와 턴 끝에서 orbit이 맡는 기억 일을 한다. 모델을 부르지 않는다.
-//   precompact   PreCompact: 마지막 worklog 기록 뒤 구간의 원문 조각을 상태 파일로 저장
+//   precompact       PreCompact: 마지막 worklog 기록 뒤 구간의 원문 조각을 상태 파일로 저장
+//   compact-restore  SessionStart(compact): 상태 파일 + worklog 최근 기록(컴팩션 전 기록)을 주입
+//   postcompact      PostCompact: 컴팩션 요약을 저장만 한다(측정·점검용, 주입 안 함)
 // 결정: D-프로젝트-기억-분담(결정 3). 실패해도 컴팩션을 막지 않는다(종료 코드 2를 쓰지 않음).
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   WRITE_TOOLS, clip, git, isHumanPrompt, isNotification, lastMarks, lastTodos, readHookInput,
@@ -109,7 +112,49 @@ function precompact(input) {
   writePrivateFile(file, buildState(input));
 }
 
-const MODES = { precompact };
+const RESTORE_LIMIT = 9500; // 훅 출력 상한 1만 자 안
+const RESTORE_STATE_LIMIT = 4500; // 상태 파일 몫. 나머지는 worklog 최근 기록 몫
+const STATE_FRESH_MS = 60 * 60 * 1000; // 이보다 오래된 상태 파일은 이번 컴팩션 것이 아니라 보고 넣지 않는다
+
+function recentCompact() {
+  const run = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'worklog.mjs'), 'recent', 'claude', '--mode', 'compact'], { cwd: ROOT, encoding: 'utf8' });
+  if (run.status !== 0) throw new Error(`worklog recent 실패: ${(run.stderr || '').trim()}`);
+  return run.stdout.trim();
+}
+
+// 앞쪽 블록(오래된 요약·턴)부터 버려 글자 상한에 맞춘다. 머리글 줄은 남긴다.
+function fitRecent(text, limit) {
+  if (text.length <= limit) return text;
+  const [head, ...blocks] = text.split(/\n\n(?=## \[)/);
+  while (blocks.length && `${head}\n\n${blocks.join('\n\n')}`.length > limit) blocks.shift();
+  return blocks.length ? `${head}\n\n${blocks.join('\n\n')}` : '';
+}
+
+function compactRestore(input) {
+  const parts = [];
+  const file = compactStatePath(input.session_id);
+  if (file && fs.existsSync(file) && Date.now() - fs.statSync(file).mtimeMs < STATE_FRESH_MS) {
+    let state = fs.readFileSync(file, 'utf8').trim();
+    if (state.length > RESTORE_STATE_LIMIT) state = `${state.slice(0, RESTORE_STATE_LIMIT - 30)}\n…(상태 파일 일부 생략: ${path.relative(ROOT, file)})`;
+    parts.push(state);
+  }
+  const used = parts.join('\n\n').length;
+  const recent = fitRecent(recentCompact(), RESTORE_LIMIT - used - 2);
+  if (recent) parts.push(recent);
+  if (parts.length) process.stdout.write(`${parts.join('\n\n')}\n`);
+}
+
+// 자동 삭제는 하지 않는다(대화 글 사본과 같은 원칙 — 크기가 작고, 지우기는 사용자가 요청할 때만).
+function postcompact(input) {
+  const summary = String(input.compact_summary || '').trim();
+  const dir = worktreeStateDir(ROOT, 'compact');
+  if (!summary || !dir) return;
+  const prefix = `${safeName(input.session_id)}-summary-`;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  writePrivateFile(path.join(dir, `${prefix}${stamp}.md`), `# 컴팩션 요약 (${input.trigger || '알 수 없음'}, ${new Date().toISOString()})\n\n${summary}\n`);
+}
+
+const MODES = { precompact, 'compact-restore': compactRestore, postcompact };
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
