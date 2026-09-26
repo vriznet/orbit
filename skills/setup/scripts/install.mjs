@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { CODE_TOOLS_KEY, codeToolsDir } from '../assets/scripts/code.mjs';
 
 const SKILL_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const ASSETS = path.join(SKILL_ROOT, 'assets');
@@ -17,7 +18,7 @@ function die(message) {
 
 function parseArgs(argv) {
   const action = argv.shift();
-  if (!['plan', 'apply', 'update'].includes(action)) die('사용법: install.mjs <plan|apply|update> [options]');
+  if (!['plan', 'apply', 'update'].includes(action)) die('사용법: install.mjs <plan|apply|update|code-tools> [options]');
 
   const options = {
     action, codex: false, reviewers: false,
@@ -289,6 +290,61 @@ function atomicWrite(file, content, mode = 0o644) {
   }
 }
 
+// ── 코드 도구(tree-sitter WASM) ──────────────────────────────────────────────────────
+// 코드 개요·펼치기(scripts/code.mjs)가 쓰는 tree-sitter 런타임과 문법을 사용자 폴더의 orbit 전용
+// 캐시(~/.cache/orbit/code-tools/<판>)에 받아 둔다. 사용자 프로젝트의 package.json·node_modules는
+// 건드리지 않고, 여러 저장소가 한 벌을 함께 쓴다. 판을 고정하고 설치 스크립트는 돌리지 않는다
+// (--ignore-scripts, WASM이라 네이티브 빌드가 필요 없다). 실패하면 조용히 넘어가지 않고 알린다.
+// 결정: D-코드개요-tree-sitter.
+const CODE_TOOLS_PACKAGES = ['@vscode/tree-sitter-wasm@0.3.1', 'tree-sitter-json@0.24.8'];
+
+function codeToolsStatus() {
+  const dir = codeToolsDir();
+  const marker = readJsonBestEffort(path.join(dir, 'orbit-code-tools.json'));
+  return { dir, present: Boolean(marker && marker.key === CODE_TOOLS_KEY && fs.existsSync(path.join(dir, 'wasm', 'tree-sitter.js'))) };
+}
+
+function ensureCodeTools() {
+  const { dir, present } = codeToolsStatus();
+  if (present) return { status: 'present', dir };
+  if ((process.env.ORBIT_CODE_TOOLS || '').toLowerCase() === 'skip') return { status: 'skipped', dir };
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-code-tools-'));
+  try {
+    const npm = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
+      'install', '--prefix', work, '--ignore-scripts', '--no-audit', '--no-fund', '--no-save', '--silent', ...CODE_TOOLS_PACKAGES,
+    ], { encoding: 'utf8', timeout: 180000 });
+    if (npm.error || npm.status !== 0) {
+      throw new Error(`npm install 실패: ${(npm.error?.message || npm.stderr || '').trim().slice(0, 400) || `종료 코드 ${npm.status}`}`);
+    }
+    const stage = `${dir}.${process.pid}.tmp`;
+    fs.rmSync(stage, { recursive: true, force: true });
+    fs.mkdirSync(path.join(stage, 'wasm'), { recursive: true });
+    fs.mkdirSync(path.join(stage, 'licenses'), { recursive: true });
+    const vscode = path.join(work, 'node_modules', '@vscode', 'tree-sitter-wasm');
+    for (const name of fs.readdirSync(path.join(vscode, 'wasm'))) fs.copyFileSync(path.join(vscode, 'wasm', name), path.join(stage, 'wasm', name));
+    fs.copyFileSync(path.join(work, 'node_modules', 'tree-sitter-json', 'tree-sitter-json.wasm'), path.join(stage, 'wasm', 'tree-sitter-json.wasm'));
+    for (const [from, to] of [[path.join(vscode, 'LICENSE'), 'vscode-tree-sitter-wasm-LICENSE'], [path.join(vscode, 'cgmanifest.json'), 'vscode-tree-sitter-wasm-cgmanifest.json'], [path.join(work, 'node_modules', 'tree-sitter-json', 'LICENSE'), 'tree-sitter-json-LICENSE']]) {
+      if (fs.existsSync(from)) fs.copyFileSync(from, path.join(stage, 'licenses', to));
+    }
+    fs.writeFileSync(path.join(stage, 'orbit-code-tools.json'), `${JSON.stringify({ key: CODE_TOOLS_KEY, packages: CODE_TOOLS_PACKAGES, installedAt: new Date().toISOString() }, null, 2)}\n`);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    fs.renameSync(stage, dir);
+    return { status: 'installed', dir };
+  } catch (error) {
+    process.stderr.write(`\n⚠️ orbit 코드 도구(tree-sitter) 설치 실패 — 코드 개요·펼치기와 큰 파일 읽기 안내가 동작하지 않습니다.\n   원인: ${error.message}\n   다시 받기: node ${path.join(SKILL_ROOT, 'scripts', 'install.mjs')} code-tools\n\n`);
+    return { status: 'failed', dir, error: error.message };
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
+if (process.argv[2] === 'code-tools') {
+  const result = ensureCodeTools();
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.exit(result.status === 'failed' ? 1 : 0);
+}
+
 const options = parseArgs(process.argv.slice(2));
 const repo = path.resolve(options.repo);
 if (!fs.existsSync(path.join(repo, '.git'))) die(`Git 저장소 루트가 아닙니다: ${repo}`);
@@ -485,6 +541,7 @@ const directAssets = [
   ['scripts/memory-lib.mjs', path.join(repo, 'scripts/memory-lib.mjs'), null],
   ['scripts/redact.mjs', path.join(repo, 'scripts/redact.mjs'), null],
   ['scripts/memory.mjs', path.join(repo, 'scripts/memory.mjs'), null],
+  ['scripts/code.mjs', path.join(repo, 'scripts/code.mjs'), null],
   ['scripts/memory-hook.mjs', path.join(repo, 'scripts/memory-hook.mjs'), null],
   ['scripts/claude-catchup.sh', path.join(repo, 'scripts/claude-catchup.sh'), null],
 ];
@@ -697,8 +754,12 @@ function migrateLegacyWorklogState() {
   } catch {}
 }
 
+const codeTools = options.action === 'plan'
+  ? { status: codeToolsStatus().present ? 'present' : 'missing', dir: codeToolsStatus().dir }
+  : ensureCodeTools();
 const summary = {
   action: options.action,
+  codeTools,
   repo,
   mode: options.mode,
   migratedFromHarness,

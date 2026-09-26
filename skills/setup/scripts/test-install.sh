@@ -9,6 +9,8 @@
 set -uo pipefail
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
+# 코드 도구(tree-sitter) 내려받기는 시나리오 61에서만 한다. 나머지 설치는 네트워크 없이 돈다.
+export ORBIT_CODE_TOOLS=skip
 FAIL=0
 
 pass() { echo "  ✅ $1"; }
@@ -1705,6 +1707,37 @@ grep -q '`recall` 스킬' "$R60/CLAUDE.md" && pass "CLAUDE.md가 recall을 안�
 J60='{"tool_name":"Agent","cwd":"'"$R60"'","tool_input":{"subagent_type":"recall-searcher"}}'
 P60="$(printf '%s' "$J60" | env -u CLAUDE_PROJECT_DIR node "$SKILL_DIR/../../hooks/agent-policy.mjs" 2>/dev/null)"
 [ -z "$P60" ] && pass "정책 훅이 recall-searcher 위임을 막지 않음" || fail "정책 훅이 recall-searcher를 거부"
+
+echo ""
+echo "== 시나리오 61: 코드 도구(tree-sitter WASM) 설치와 개요·펼치기 =="
+CT61="$WORK/code-tools"
+CT61_OUT="$(env -u ORBIT_CODE_TOOLS ORBIT_CODE_TOOLS_DIR="$CT61" node "$SKILL_DIR/scripts/install.mjs" code-tools 2>&1)"; CT61_RC=$?
+if [ "$CT61_RC" != "0" ] && echo "$CT61_OUT" | grep -q 'npm install 실패'; then
+  echo "  ⚠️ 네트워크·npm 문제로 코드 도구를 받지 못해 이 시나리오의 나머지는 건너뜀: $(echo "$CT61_OUT" | grep '원인' | head -1)"
+else
+  [ "$CT61_RC" = "0" ] && [ -f "$CT61/wasm/tree-sitter.js" ] && [ -f "$CT61/wasm/tree-sitter-typescript.wasm" ] && [ -f "$CT61/wasm/tree-sitter-json.wasm" ] && pass "코드 도구를 orbit 전용 폴더에 설치" || fail "코드 도구 설치 실패: ${CT61_OUT}"
+  ls "$CT61/licenses" | grep -q 'LICENSE' && pass "라이선스 파일 함께 보관" || fail "라이선스 파일 없음"
+  env -u ORBIT_CODE_TOOLS ORBIT_CODE_TOOLS_DIR="$CT61" node "$SKILL_DIR/scripts/install.mjs" code-tools | grep -q '"present"' && pass "다시 실행하면 이미 있음" || fail "두 번째 실행이 present가 아님"
+  R61="$WORK/scenario61"; new_repo "$R61"
+  ORBIT_CODE_TOOLS_DIR="$CT61" node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R61" --project-name "Scenario61" --slug scenario61 --mode new > "$WORK/s61.json" 2>/dev/null
+  grep -q '"status": "present"' "$WORK/s61.json" && [ ! -e "$R61/node_modules" ] && pass "설치 요약에 코드 도구 상태·사용자 node_modules 없음" || fail "설치 요약 codeTools 이상"
+  mkdir -p "$R61/src"
+  printf 'export class Cache {\n  get(k: string) {\n    return 1;\n  }\n  set(k: string) {}\n}\nexport const make = () => new Cache();\ninterface Opts { ttl: number }\n' > "$R61/src/cache.ts"
+  printf 'class Store:\n    def load(self):\n        return 1\n\ndef main():\n    pass\n' > "$R61/src/store.py"
+  printf '# 제목\n\n## 설치\n```\n# 코드 안 주석은 제목 아님\n```\n## 사용\n' > "$R61/README.md"
+  O61="$(cd "$R61" && ORBIT_CODE_TOOLS_DIR="$CT61" node scripts/code.mjs outline src/cache.ts)"
+  echo "$O61" | grep -q 'L1-6  class Cache' && echo "$O61" | grep -q '  L2-4  method get' && echo "$O61" | grep -q 'L7-7  function make' && echo "$O61" | grep -q 'interface Opts' && pass "TS 개요: 클래스·메서드·화살표 함수·인터페이스와 줄 범위" || fail "TS 개요 이상: ${O61}"
+  (cd "$R61" && ORBIT_CODE_TOOLS_DIR="$CT61" node scripts/code.mjs outline src/store.py) | grep -q '  L2-3  function load' && pass "Python 개요" || fail "Python 개요 이상"
+  M61="$(cd "$R61" && ORBIT_CODE_TOOLS_DIR="$CT61" node scripts/code.mjs outline README.md)"
+  echo "$M61" | grep -q 'h2 설치' && ! echo "$M61" | grep -q '코드 안 주석' && pass "Markdown 개요(코드 블록 안 # 제외)" || fail "Markdown 개요 이상: ${M61}"
+  U61="$(cd "$R61" && ORBIT_CODE_TOOLS_DIR="$CT61" node scripts/code.mjs unfold src/cache.ts Cache.get)"
+  echo "$U61" | head -1 | grep -q 'src/cache.ts:2-4 method get' && echo "$U61" | grep -q 'return 1;' && ! echo "$U61" | grep -q 'set(k' && pass "unfold Class.method → 그 정의만" || fail "unfold 이상: ${U61}"
+  (cd "$R61" && ORBIT_CODE_TOOLS_DIR="$CT61" node scripts/code.mjs unfold src/cache.ts nope >/dev/null 2>&1); [ $? = 1 ] && pass "없는 심볼은 오류로 알림" || fail "없는 심볼 처리 이상"
+  N61="$(cd "$R61" && ORBIT_CODE_TOOLS_DIR="$WORK/none" node scripts/code.mjs outline src/cache.ts 2>&1)"
+  echo "$N61" | grep -q '코드 도구(tree-sitter)가 설치되지 않았습니다' && pass "도구가 없으면 다시 받는 법을 알림" || fail "도구 없음 안내 없음"
+fi
+F61="$(env -u ORBIT_CODE_TOOLS ORBIT_CODE_TOOLS_DIR=/dev/null/orbit-ct node "$SKILL_DIR/scripts/install.mjs" code-tools 2>&1)"; F61_RC=$?
+[ "$F61_RC" = "1" ] && echo "$F61" | grep -q '코드 도구(tree-sitter) 설치 실패' && echo "$F61" | grep -q '다시 받기:' && pass "설치 실패를 조용히 넘기지 않고 알림" || fail "설치 실패 알림 이상"
 
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
