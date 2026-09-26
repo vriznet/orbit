@@ -14,6 +14,7 @@ import {
   readTranscript, runningBackgroundTasks, safeName, textOf, toolFilePath, toolUses, worktreeStateDir,
   writePrivateFile,
 } from './memory-lib.mjs';
+import { redact } from './redact.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const STATE_LIMIT = 8000; // SessionStart 주입 상한(1만 자) 안에 recent와 함께 들어가도록
@@ -109,7 +110,8 @@ function buildState(input) {
 function precompact(input) {
   const file = compactStatePath(input.session_id);
   if (!file) return;
-  writePrivateFile(file, buildState(input));
+  // 비밀값은 저장 전에 가린다(완벽하지 않음 — redact.mjs 참고).
+  writePrivateFile(file, redact(buildState(input)));
 }
 
 const RESTORE_LIMIT = 9500; // 훅 출력 상한 1만 자 안
@@ -151,7 +153,7 @@ function postcompact(input) {
   if (!summary || !dir) return;
   const prefix = `${safeName(input.session_id)}-summary-`;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  writePrivateFile(path.join(dir, `${prefix}${stamp}.md`), `# 컴팩션 요약 (${input.trigger || '알 수 없음'}, ${new Date().toISOString()})\n\n${summary}\n`);
+  writePrivateFile(path.join(dir, `${prefix}${stamp}.md`), `# 컴팩션 요약 (${input.trigger || '알 수 없음'}, ${new Date().toISOString()})\n\n${redact(summary)}\n`);
 }
 
 const MODES = { precompact, 'compact-restore': compactRestore, postcompact };

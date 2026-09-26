@@ -483,6 +483,7 @@ const directAssets = [
   ['scripts/wiki.mjs', path.join(repo, 'scripts/wiki.mjs'), null],
   ['scripts/worktree-merge-inspect.mjs', path.join(repo, 'scripts/worktree-merge-inspect.mjs'), null],
   ['scripts/memory-lib.mjs', path.join(repo, 'scripts/memory-lib.mjs'), null],
+  ['scripts/redact.mjs', path.join(repo, 'scripts/redact.mjs'), null],
   ['scripts/memory-hook.mjs', path.join(repo, 'scripts/memory-hook.mjs'), null],
   ['scripts/claude-catchup.sh', path.join(repo, 'scripts/claude-catchup.sh'), null],
 ];

@@ -1334,6 +1334,51 @@ const ss=s.hooks.SessionStart; const recents=ss.flatMap(g=>g.hooks).filter(h=>/r
 process.exit(ss.length===2 && recents.length===1 && s.hooks.PreCompact && s.hooks.PostCompact ? 0 : 1);
 ' "$R52U/.claude/settings.json" && pass "옛 SessionStart 배선 → 두 갈래로 교체(중복 없음)" || fail "옛 배선 교체 실패"
 
+echo ""
+echo "== 시나리오 53: 비밀값 가림(redact.mjs)과 컴팩션 파일 적용 =="
+R53="$WORK/scenario53"
+new_repo "$R53"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R53" --project-name "Scenario53" --slug scenario53 --mode new >/dev/null 2>&1
+S53_OUT="$(cd "$R53" && node --input-type=module - <<'NODE'
+import fs from 'node:fs'; import path from 'node:path'; import { spawnSync } from 'node:child_process';
+import { redact, redactPrefix } from './scripts/redact.mjs';
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const ds = 'sk-' + '0123456789abcdef'.repeat(2), ant = 'sk-ant-api03-' + 'Q'.repeat(40);
+const secrets = {
+  'sk- 키': ds, 'sk-ant 키': ant, 'GitHub 토큰': 'ghp_' + 'a1B2'.repeat(9), 'AWS 키': 'AKIA' + 'ABCDEFGHIJKLMNOP',
+  'URL 비밀번호': 's3cretPassw0rd42', 'PEM 개인키': 'b3BlbnNzaC1rZXktdjEAAAAA42', '이스케이프 JSON 값': 'escapedValue123456',
+  '따옴표 속 빈칸 비밀번호': 'correct horse battery', 'Bearer 토큰': 'abcdefghijklmnopqrstuvwxyz0123', '환경변수 줄': 'hunter2hunter',
+};
+const sample = [
+  `DeepSeek ${ds}`, `curl -H "x-api-key: ${secrets['sk-ant 키']}"`, `remote ${secrets['GitHub 토큰']}`, `AWS ${secrets['AWS 키']}`,
+  `postgres://app:${secrets['URL 비밀번호']}@db:5432/x`,
+  `-----BEGIN OPENSSH PRIVATE KEY-----\n${secrets['PEM 개인키']}\n-----END OPENSSH PRIVATE KEY-----`,
+  `{\\"ANTHROPIC_AUTH_TOKEN\\": \\"${secrets['이스케이프 JSON 값']}\\"}`, `"password": "${secrets['따옴표 속 빈칸 비밀번호']}"`,
+  `Authorization: Bearer ${secrets['Bearer 토큰']}`, `export DB_PASSWORD=${secrets['환경변수 줄']}`,
+].join('\n');
+const out = redact(sample);
+for (const [name, value] of Object.entries(secrets)) ok(!out.includes(value), `${name} 가림`);
+const plain = ['N=8', 'secret information about 계획', 'token 수는 1만', 'the password policy requires 12 chars', 'https://example.com/a:b', 'Authorization: Bearer'];
+for (const text of plain) ok(redact(text) === text, `평범한 글 보존: ${text}`);
+ok(!redactPrefix(`xxxx ${ds}`, 12).includes('0123456'), '자르는 자리에 걸친 비밀값도 가림');
+const big = ('일반 대화 글 '.repeat(50) + '\n').repeat(2000);
+const t0 = Date.now(); redact(big); const ms = Date.now() - t0;
+ok(ms < 2000, `1MB 남짓 글 가림 ${ms}ms`);
+// 컴팩션 상태 파일·요약에 적용
+const T = path.join(process.cwd(), '..', 't53.jsonl');
+fs.writeFileSync(T, JSON.stringify({ type: 'user', message: { role: 'user', content: `키는 ${ds} 입니다` } }) + '\n');
+spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'precompact'], { input: JSON.stringify({ session_id: 's53', transcript_path: T, trigger: 'auto' }), encoding: 'utf8' });
+const state = fs.readFileSync('.git/orbit-state/compact/s53.md', 'utf8');
+ok(!state.includes(ds) && state.includes('[REDACTED]'), '상태 파일에서 가림');
+spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'postcompact'], { input: JSON.stringify({ session_id: 's53', trigger: 'manual', compact_summary: `요약 속 키 ${ant}` }), encoding: 'utf8' });
+const sum = fs.readdirSync('.git/orbit-state/compact').find((n) => n.startsWith('s53-summary-'));
+ok(sum && !fs.readFileSync(`.git/orbit-state/compact/${sum}`, 'utf8').includes(ant), '컴팩션 요약에서 가림');
+process.exit(failed ? 1 : 0);
+NODE
+)"; S53_RC=$?
+echo "${S53_OUT}"
+[ "${S53_RC}" = "0" ] || fail "시나리오 53 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0
