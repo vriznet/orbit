@@ -1643,6 +1643,52 @@ NODE
 echo "${S58_OUT}"
 [ "${S58_RC}" = "0" ] || fail "시나리오 58 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 59: 파일별 기억 주입(PreToolUse, 목록만) =="
+R59="$WORK/scenario59"
+new_repo "$R59"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R59" --project-name "Scenario59" --slug scenario59 --mode new >/dev/null 2>&1
+grep -q 'memory-hook.mjs\\" pre-tool' "$R59/.claude/settings.json" && pass "PreToolUse(Read·Edit·Write) 배선" || fail "pre-tool 배선 없음"
+S59_OUT="$(cd "$R59" && R59_LINKED="$R59" node - <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd();
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+spawnSync(process.execPath, ['scripts/worklog.mjs', 'append', 'claude', '캐시 TTL 버그를 고쳐라', '고침']);
+const mem = path.join('.git', 'orbit-memory'); fs.mkdirSync(mem, { recursive: true });
+const tool = (session, seq, at, tool, file, worklog = null) => JSON.stringify({ v: 1, session, seq, at, tool, file, worklog, worktree: ROOT });
+fs.writeFileSync(path.join(mem, 'tools.jsonl'), [
+  tool('oldsess01', 1, '2026-09-01T00:00:00Z', 'Read', 'src/cache.js'),
+  tool('oldsess01', 2, '2026-09-02T00:00:00Z', 'Edit', 'src/cache.js', 1),
+  tool('oldsess01', 3, '2026-09-03T00:00:00Z', 'Read', 'src/cache.js'),
+  tool('oldsess01', 4, '2026-09-04T00:00:00Z', 'Write', 'src/cache.js'),
+  tool('oldsess01', 4, '2026-09-04T00:00:01Z', 'Read', 'src/other.js'),
+].join('\n') + '\n');
+fs.writeFileSync(path.join(mem, 'dialogue.jsonl'), JSON.stringify({ v: 1, session: 'oldsess01', seq: 4, at: '2026-09-04T00:00:00Z', user: '캐시 모듈을 새로 써 줘', assistant: '썼습니다' }) + '\n');
+const pre = (session, tool_name, file) => spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'pre-tool'], { input: JSON.stringify({ session_id: session, tool_name, tool_input: { file_path: path.join(ROOT, file) } }), encoding: 'utf8' });
+const r1 = pre('now1', 'Read', 'src/cache.js');
+const j1 = r1.stdout ? JSON.parse(r1.stdout) : {};
+const ctx = j1.hookSpecificOutput?.additionalContext || '';
+ok(j1.hookSpecificOutput?.hookEventName === 'PreToolUse' && j1.hookSpecificOutput.permissionDecision === undefined, 'additionalContext만(권한 결정은 건드리지 않음)');
+ok(ctx.includes('src/cache.js') && ctx.split('\n').filter((l) => l.startsWith('- ')).length === 3, '최근 3개 턴 목록');
+ok(ctx.includes('t:oldsess0:4') && ctx.includes('d:oldsess0:4') && ctx.includes('캐시 모듈을 새로 써 줘'), '번호와 대화 사본 한 줄');
+ok(ctx.includes('#1 ') && ctx.includes('캐시 TTL 버그를 고쳐라'), 'worklog 번호가 있으면 그 물음을 한 줄로');
+ok(!ctx.includes('썼습니다') && ctx.includes('상세: node scripts/memory.mjs show'), '본문은 넣지 않고 show 안내');
+ok(ctx.length <= 1200, `1,200자 이하(${ctx.length})`);
+ok(pre('now1', 'Edit', 'src/cache.js').stdout === '', '같은 세션·같은 파일은 한 번만');
+ok(pre('now1', 'Read', 'src/none.js').stdout === '', '과거가 없으면 아무것도 안 넣음');
+ok(pre('now1', 'Bash', 'src/cache.js').stdout === '', '파일 도구가 아니면 무시');
+spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'compact-restore'], { input: JSON.stringify({ session_id: 'now1', source: 'compact' }), encoding: 'utf8' });
+ok(pre('now1', 'Read', 'src/cache.js').stdout.includes('src/cache.js'), '컴팩션 뒤에는 다시 넣음');
+ok(pre('now2', 'Read', 'src/cache.js').stdout.includes('src/cache.js'), '다른 세션은 따로 셈');
+// macOS mktemp 경로(/var → /private/var)처럼 심볼릭 링크를 거친 절대 경로로 들어와도 같은 파일로 본다.
+const viaLink = spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'pre-tool'], { input: JSON.stringify({ session_id: 'now3', tool_name: 'Read', tool_input: { file_path: path.join(process.env.R59_LINKED, 'src', 'cache.js') } }), encoding: 'utf8' });
+ok(viaLink.stdout.includes('src/cache.js') && viaLink.stdout.includes('t:oldsess0:4'), '심볼릭 링크 경로·아직 없는 폴더도 상대 경로로 맞춤');
+process.exit(failed ? 1 : 0);
+NODE
+)"; S59_RC=$?
+echo "${S59_OUT}"
+[ "${S59_RC}" = "0" ] || fail "시나리오 59 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

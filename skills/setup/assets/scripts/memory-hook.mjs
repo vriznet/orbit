@@ -6,6 +6,8 @@
 //   turn-start       UserPromptSubmit: 턴 시작 git 상태 지문(바뀐 파일 추정용)
 //   stop             Stop: 이번 턴의 사람·AI 글을 가려 대화 글 사본에, 도구 사용(이름·대상 파일·Bash 명령 앞부분)을
 //                    도구 색인에 덧붙인다(결정 6·7). 도구 출력은 복사하지 않는다.
+//   pre-tool         PreToolUse(Read·Edit·Write): 그 파일을 다룬 과거 턴을 '날짜 · 번호 · 한 줄' 목록으로
+//                    넣는다(본문 없음, 상세는 memory.mjs show). 같은 세션에서 파일마다 한 번(컴팩션 뒤 다시).
 // 결정: D-프로젝트-기억-분담(결정 3). 실패해도 컴팩션을 막지 않는다(종료 코드 2를 쓰지 않음).
 
 import fs from 'node:fs';
@@ -16,21 +18,19 @@ import { fileURLToPath } from 'node:url';
 import {
   WRITE_TOOLS, changedSince, clip, ensurePrivateDir, git, gitSnapshot, isHumanPrompt, isNotification, lastMarks,
   lastTodos, readHookInput, readTranscript, readTranscriptFrom, runningBackgroundTasks, safeName, sharedMemoryDir,
-  textOf, toolFilePath, toolUses, withLock, worktreeStateDir, writePrivateFile,
+  dialogueId, repoRelative, textOf, toolFilePath, toolUses, toolsId, withLock, worktreeStateDir, writePrivateFile,
 } from './memory-lib.mjs';
 import { redact, redactPrefix } from './redact.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const DOCS = path.join(ROOT, '{{DOCS_DIR}}');
 const STATE_LIMIT = 8000; // SessionStart 주입 상한(1만 자) 안에 recent와 함께 들어가도록
 const PROMPT_LIMIT = 1500;
 const MAX_PROMPTS = 6;
 const MAX_FILES = 40;
 
 function relative(file) {
-  if (!file) return null;
-  const abs = path.resolve(ROOT, file);
-  const rel = path.relative(ROOT, abs);
-  return rel.startsWith('..') ? abs : rel;
+  return repoRelative(ROOT, file);
 }
 
 export function compactStatePath(sessionId) {
@@ -137,6 +137,9 @@ function fitRecent(text, limit) {
 }
 
 function compactRestore(input) {
+  // 컴팩션으로 앞선 주입이 요약되어 사라졌으니, 파일별 기억 기록부를 비워 다시 넣게 한다.
+  const registry = injectedRegistryPath(input.session_id);
+  if (registry) { try { fs.rmSync(registry, { force: true }); } catch {} }
   const parts = [];
   const file = compactStatePath(input.session_id);
   if (file && fs.existsSync(file) && Date.now() - fs.statSync(file).mtimeMs < STATE_FRESH_MS) {
@@ -197,10 +200,7 @@ function toolActivity(use, at) {
   const input = use.input || {};
   const file = toolFilePath(use);
   const record = { at: at || new Date().toISOString(), tool: String(use.name || '') };
-  if (file) {
-    const rel = path.relative(ROOT, path.resolve(ROOT, file));
-    record.file = rel.startsWith('..') ? path.resolve(ROOT, file) : rel;
-  }
+  if (file) record.file = repoRelative(ROOT, file);
   if (use.name === 'Bash' && input.command) record.command = redactPrefix(String(input.command).replace(/\s+/g, ' '), 200);
   if (input.pattern && (use.name === 'Grep' || use.name === 'Glob')) record.pattern = redactPrefix(String(input.pattern), 120);
   if (use.name === 'Agent' && input.subagent_type) record.agent = String(input.subagent_type);
@@ -290,7 +290,93 @@ function stop(input) {
   });
 }
 
-const MODES = { precompact, 'compact-restore': compactRestore, postcompact, 'turn-start': turnStart, stop };
+// ── 파일별 기억 주입 ──────────────────────────────────────────────────────────────
+// 파일을 읽거나 고치기 직전(PreToolUse), 그 파일을 다룬 과거 턴을 도구 색인에서 AI 없이 찾아
+// 목록만 넣는다. additionalContext는 도구 결과 옆에 들어가고 권한 결정은 건드리지 않는다
+// (permissionDecision을 쓰지 않는다). 결정: D-프로젝트-기억-분담(결정 7).
+const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const FILE_MEMORY_TURNS = 3;
+const FILE_MEMORY_LIMIT = 1200;
+
+function injectedRegistryPath(sessionId) {
+  const dir = worktreeStateDir(ROOT, 'memory');
+  return dir ? path.join(dir, `${safeName(sessionId)}.injected.json`) : null;
+}
+
+function readJsonl(file) {
+  if (!file || !fs.existsSync(file)) return [];
+  const out = [];
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try { out.push(JSON.parse(line)); } catch {}
+  }
+  return out;
+}
+
+function worklogAsks() {
+  const asks = new Map();
+  try {
+    for (const block of fs.readFileSync(path.join(DOCS, 'worklog.md'), 'utf8').split(/\n(?=## \[#)/)) {
+      const n = (block.match(/^## \[#(\d+)\]/) || [])[1];
+      const ask = (block.match(/^- 물음: (.*)$/m) || [])[1];
+      if (n && ask) asks.set(Number(n), ask);
+    }
+  } catch {}
+  return asks;
+}
+
+function fileMemory(rel) {
+  const shared = sharedMemoryDir(ROOT);
+  if (!shared) return '';
+  const turns = new Map();
+  for (const record of readJsonl(path.join(shared, 'tools.jsonl'))) {
+    if (record.file !== rel) continue;
+    const key = toolsId(record);
+    const turn = turns.get(key) || { record, tools: new Set(), at: record.at };
+    turn.tools.add(record.tool);
+    if (String(record.at) > String(turn.at)) turn.at = record.at;
+    turns.set(key, turn);
+  }
+  if (!turns.size) return '';
+  const recent = [...turns.values()].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, FILE_MEMORY_TURNS);
+  const asks = worklogAsks();
+  const dialogue = new Map(readJsonl(path.join(shared, 'dialogue.jsonl')).map((r) => [dialogueId(r), r]));
+  const lines = [`[orbit 기억] ${rel}을(를) 다룬 과거 턴 ${recent.length}개(최근 순, 전체 ${turns.size}):`];
+  for (const turn of recent) {
+    const r = turn.record;
+    const said = r.worklog && asks.get(r.worklog)
+      ? asks.get(r.worklog)
+      : (dialogue.get(dialogueId(r))?.user || '');
+    const ids = [r.worklog ? `#${r.worklog}` : '', dialogue.has(dialogueId(r)) ? dialogueId(r) : '', toolsId(r)].filter(Boolean).join(' ');
+    lines.push(`- ${String(turn.at || '').slice(0, 10)} · ${ids} · ${[...turn.tools].join('/')} · ${clip(String(said).replace(/\s+/g, ' ').trim() || '(글 없음)', 110)}`);
+  }
+  lines.push('상세: node scripts/memory.mjs show <번호>');
+  const text = lines.join('\n');
+  return text.length > FILE_MEMORY_LIMIT ? `${text.slice(0, FILE_MEMORY_LIMIT - 1)}…` : text;
+}
+
+function preTool(input) {
+  if (!FILE_TOOLS.has(input.tool_name)) return;
+  const file = toolFilePath({ input: input.tool_input });
+  if (!file) return;
+  const rel = repoRelative(ROOT, file);
+  const parts = [];
+
+  const registryFile = injectedRegistryPath(input.session_id);
+  const registry = (registryFile && readJson(registryFile)) || { files: [] };
+  if (!registry.files.includes(rel)) {
+    const memory = fileMemory(rel);
+    if (memory) {
+      parts.push(memory);
+      registry.files.push(rel);
+      if (registryFile) writePrivateFile(registryFile, `${JSON.stringify(registry)}\n`);
+    }
+  }
+  if (!parts.length) return;
+  process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: parts.join('\n\n') } })}\n`);
+}
+
+const MODES = { precompact, 'compact-restore': compactRestore, postcompact, 'turn-start': turnStart, stop, 'pre-tool': preTool };
 
 // 직접 실행됐는지는 실제 경로로 가린다. 심볼릭 링크를 거친 경로(/var → /private/var, 링크로 연
 // 프로젝트 폴더)로 부르면 문자열이 달라 훅이 아무 일도 안 하고 끝나던 결함을 막는다.

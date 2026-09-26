@@ -157,6 +157,22 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/memory-hook.mjs\" pre-tool"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

@@ -258,3 +258,26 @@ export function readTranscriptFrom(file, offset) {
 export const shortSession = (session) => String(session || '').slice(0, 8);
 export const dialogueId = (record) => `d:${shortSession(record.session)}:${record.seq}`;
 export const toolsId = (record) => `t:${shortSession(record.session)}:${record.seq}`;
+
+// 저장소 기준 상대 경로. 심볼릭 링크를 거친 경로(/var → /private/var, 링크로 연 프로젝트)도 실제
+// 경로로 맞춘 뒤 비교한다. 아직 없는 파일(Write로 새로 만듦)은 부모 폴더의 실제 경로로 맞춘다.
+// 저장소 밖이면 절대 경로를 돌려준다.
+function realOrSelf(file) {
+  // 있는 가장 가까운 조상 폴더까지 올라가 실제 경로로 바꾸고, 없는 나머지 이름을 다시 붙인다.
+  let current = file;
+  const rest = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync(current), ...rest.reverse()); } catch {}
+    const parent = path.dirname(current);
+    if (parent === current) return file;
+    rest.push(path.basename(current));
+    current = parent;
+  }
+}
+
+export function repoRelative(root, file) {
+  if (!file) return null;
+  const abs = realOrSelf(path.resolve(root, file));
+  const rel = path.relative(realOrSelf(root), abs);
+  return rel.startsWith('..') || path.isAbsolute(rel) ? abs : rel;
+}
