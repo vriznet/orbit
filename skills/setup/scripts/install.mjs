@@ -383,14 +383,52 @@ function manifestHashMatches(manifestKey, currentBuffer) {
   return recorded === sha256Hex(currentBuffer);
 }
 
+// CLAUDE.md의 orbit 관리 구간. 사용자는 구간 밖에 지식 맵·프로젝트 규칙을 더하고, update는
+// 구간 안만 새 판으로 바꾼다. 파일 전체를 해시로 비교하면 한 줄만 더한 설치본에도 새 규칙
+// (Compact instructions 등)이 영영 들어가지 않았다. 결정: D-프로젝트-기억-분담(결정 9).
+const ORBIT_BLOCK_BEGIN = '<!-- orbit:begin';
+const ORBIT_BLOCK_END = '<!-- orbit:end -->';
+const BLOCK_MANAGED_FILES = new Set(['CLAUDE.md']);
+
+function findOrbitBlock(text) {
+  const start = text.indexOf(ORBIT_BLOCK_BEGIN);
+  if (start === -1) return null;
+  const endAt = text.indexOf(ORBIT_BLOCK_END, start);
+  if (endAt === -1) return null;
+  const end = endAt + ORBIT_BLOCK_END.length;
+  return { start, end, block: text.slice(start, end) };
+}
+
+// 구간이 있는 파일이면 {status, desired}를 돌려주고, 아니면 null(파일 단위 규칙으로 후퇴).
+// 구간 안을 사용자가 고쳤으면(매니페스트의 구간 해시와 다름) 덮지 않고 충돌로 둔다.
+function planBlockUpdate(manifestKey, currentPath, desired) {
+  if (!BLOCK_MANAGED_FILES.has(manifestKey) || !fs.existsSync(currentPath)) return null;
+  const currentText = fs.readFileSync(currentPath, 'utf8');
+  const current = findOrbitBlock(currentText);
+  const wanted = findOrbitBlock(desired.toString('utf8'));
+  if (!current || !wanted) return null;
+  const merged = currentText.slice(0, current.start) + wanted.block + currentText.slice(current.end);
+  if (merged === currentText) return { status: 'skip', desired: Buffer.from(merged) };
+  const recorded = manifest?.blocks?.[manifestKey];
+  if (recorded && recorded !== sha256Hex(Buffer.from(current.block))) {
+    conflicts.push(`${manifestKey}: orbit 구간 안을 고친 흔적이 있어 새 구간으로 바꾸지 않았습니다. 고친 내용을 구간 밖으로 옮긴 뒤 다시 update하세요.`);
+    return { status: 'conflict', desired };
+  }
+  return { status: 'update', desired: Buffer.from(merged) };
+}
+
 function addFile(source, destination, legacy = null, currentOverride = null) {
   const isJsTarget = path.extname(destination) === '.mjs';
-  const desired = renderedFile(source, vars, isJsTarget);
+  let desired = renderedFile(source, vars, isJsTarget);
   const currentPath = currentOverride || destination;
   const manifestKey = path.relative(repo, destination);
   let status = 'create';
+  const blockPlan = planBlockUpdate(manifestKey, currentPath, desired);
 
-  if (fs.existsSync(currentPath)) {
+  if (blockPlan) {
+    status = blockPlan.status;
+    desired = blockPlan.desired;
+  } else if (fs.existsSync(currentPath)) {
     const current = fs.readFileSync(currentPath);
     if (sameBuffer(current, desired)) {
       status = 'skip';
@@ -400,7 +438,9 @@ function addFile(source, destination, legacy = null, currentOverride = null) {
     } else if (legacy && fs.existsSync(legacy) && sameBuffer(current, renderedFile(legacy, legacyVars, isJsTarget))) {
       status = 'update';
     } else {
-      conflicts.push(`${path.relative(repo, currentPath)}: 기존 내용이 후보와 다릅니다.`);
+      conflicts.push(BLOCK_MANAGED_FILES.has(manifestKey)
+        ? `${path.relative(repo, currentPath)}: orbit 구간 표시가 없고 설치 뒤 고친 흔적이 있어 새 판을 넣지 않았습니다. 새 템플릿의 '<!-- orbit:begin' ~ '<!-- orbit:end -->' 구간을 붙여 넣으면 다음 update부터 구간만 바뀝니다.`
+        : `${path.relative(repo, currentPath)}: 기존 내용이 후보와 다릅니다.`);
       status = 'conflict';
     }
   }
@@ -741,6 +781,13 @@ function writeManifest() {
     if (op.status === 'conflict') continue;
     files[op.manifestKey] = sha256Hex(op.desired);
   }
+  // 관리 구간 해시 — 다음 update에서 사용자가 구간 안을 고쳤는지 가린다.
+  const blocks = { ...(manifest?.blocks ?? {}) };
+  for (const op of operations) {
+    if (op.status === 'conflict' || !BLOCK_MANAGED_FILES.has(op.manifestKey)) continue;
+    const found = findOrbitBlock(op.desired.toString('utf8'));
+    if (found) blocks[op.manifestKey] = sha256Hex(Buffer.from(found.block));
+  }
   const manifestOut = {
     schemaVersion: 1,
     skillVersion,
@@ -748,6 +795,7 @@ function writeManifest() {
     projectName: options['project-name'],
     docsDir: docsName,
     files,
+    blocks,
     modules: {
       codex: options.codex,
       reviewers: options.reviewers,

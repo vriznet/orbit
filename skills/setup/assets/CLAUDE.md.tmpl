@@ -1,3 +1,4 @@
+<!-- orbit:begin — 이 구간은 orbit update가 새 판으로 바꾼다. 프로젝트 규칙과 지식 맵 항목은 구간 밖(아래 "프로젝트 메모")에 적는다. -->
 ## 어디를 읽을지 (지식 맵)
 - `{{DOCS_DIR}}/decisions/` — 의사결정 로그(ADR). 결정 1건 = 파일 1개, 인덱스는 `README.md`. **확정된 파일은 수정하지 않는다**(아래 규칙 참고).
 - `{{DOCS_DIR}}/wiki/` — 여러 작업에서 다시 쓸 프로젝트 지식. 진입점은 `_index.md`, 노트 형식과 갱신 기준은 `_schema.md`.
@@ -6,7 +7,7 @@
 - `{{DOCS_DIR}}/tasks.md` — 살아있는 실행 할일(GTD 원장). **`scripts/tasks.mjs`로만 관리(손 편집 금지).** 아래 "매 턴 자기평가" 참고.
 - `{{DOCS_DIR}}/rules.md` — 글쓰기·자기검증·ADR감지·할일감지·커밋 규칙 **상세**(아래 트리거들의 원본).
 - `{{DOCS_DIR}}/templates/` — 문서 양식 모음(`adr.md`·`wiki.md`·`worklog.md`·`backlog.md`·`subagent-brief.md`). **ADR·위키 노트·worklog 항목·backlog 항목은 해당 도메인 템플릿 양식을 따르고, 서브에이전트에 일을 맡길 때는 `subagent-brief.md` 양식으로 위임 글을 쓴다.**
-<!-- 프로젝트가 자라면 여기에 product-spec·architecture 등 지식 맵 항목을 추가한다 -->
+<!-- 지식 맵 항목(product-spec·architecture 등)은 이 구간 밖, 파일 아래 "프로젝트 메모"에 더한다 -->
 
 ## 문서 볼트 경계 (매 작업)
 - `{{DOCS_DIR}}/`는 프로젝트 지식, ADR, 위키, 작업 기록을 보관하는 **문서 전용 영역**이다.
@@ -31,3 +32,7 @@
 ## ADR 불변 규칙
 - **확정된 ADR 파일은 수정하지 않는다.** 내용이 바뀌거나 번복되면 **새 ADR을 만들고**, 옛 파일 맨 위에 `> ⚠️ <새 ADR>으로 대체됨` 링크, 새 파일에 `- 관계: <옛 ADR> 대체/진화`.
 - **ADR 파일명 형식**: `D-슬러그-YYMMDD-HHMMSS.md`(예: `D-원장ID형식-260807-193512.md`). 기존 순번 ID가 있으면 그대로 두고 앞으로 만드는 것부터 이 형식을 쓴다. 상세: `{{DOCS_DIR}}/rules.md`.
+<!-- orbit:end -->
+
+## 프로젝트 메모
+<!-- orbit이 건드리지 않는 곳이다. 지식 맵 항목(product-spec·architecture 등)과 이 프로젝트만의 규칙을 여기에 더한다. -->

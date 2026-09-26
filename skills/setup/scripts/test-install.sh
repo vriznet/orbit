@@ -175,14 +175,15 @@ new_repo "$R9"
 node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R9" --project-name "Scenario9" --slug scenario9 --mode new >/dev/null 2>&1
 SKILL_COPY9="$WORK/skillcopy9"
 cp -R "$SKILL_DIR" "$SKILL_COPY9"
-{ echo ""; echo "<!-- v-next marker -->"; } >> "$SKILL_COPY9/assets/CLAUDE.md.tmpl"
+node -e 'const fs=require("fs");const f=process.argv[1];fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("<!-- orbit:end -->","<!-- v-next marker -->\n<!-- orbit:end -->"))' "$SKILL_COPY9/assets/CLAUDE.md.tmpl"
 PLAN9="$(node "$SKILL_COPY9/scripts/install.mjs" plan --repo "$R9" --project-name "Scenario9" --slug scenario9 --mode upgrade 2>&1)"
 CONFLICTS9="$(echo "${PLAN9}" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['conflicts']))" 2>/dev/null || echo err)"
 [ "${CONFLICTS9}" = "0" ] && pass "스킬 템플릿 갱신(버전업) → 충돌 0" || fail "정상 버전업인데 충돌 발생 (got: ${CONFLICTS9})"
 node "$SKILL_COPY9/scripts/install.mjs" apply --repo "$R9" --project-name "Scenario9" --slug scenario9 --mode upgrade >/dev/null 2>&1
 grep -q "v-next marker" "$R9/CLAUDE.md" && pass "새 템플릿 내용이 실제로 반영됨" || fail "apply 후에도 새 내용이 반영 안 됨"
 
-echo "USER EDIT" >> "$R9/CLAUDE.md"
+# 관리 구간 안을 고친다(구간 밖 수정은 충돌이 아니다 — 시나리오 49).
+node -e 'const fs=require("fs");const f=process.argv[1];fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("<!-- v-next marker -->","<!-- v-next marker --> USER EDIT"))' "$R9/CLAUDE.md"
 PLAN9B="$(node "$SKILL_COPY9/scripts/install.mjs" plan --repo "$R9" --project-name "Scenario9" --slug scenario9 --mode upgrade 2>&1)"
 CONFLICTS9B="$(echo "${PLAN9B}" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['conflicts']))" 2>/dev/null || echo err)"
 if [ "${CONFLICTS9B}" != "0" ] && [ "${CONFLICTS9B}" != "err" ]; then
@@ -295,7 +296,7 @@ APPLY15_1_CODE=$?
 
 SKILL_COPY15="$WORK/skillcopy15"
 cp -R "$SKILL_DIR" "$SKILL_COPY15"
-{ echo ""; echo "<!-- v-next marker 15 -->"; } >> "$SKILL_COPY15/assets/CLAUDE.md.tmpl"
+node -e 'const fs=require("fs");const f=process.argv[1];fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("<!-- orbit:end -->","<!-- v-next marker 15 -->\n<!-- orbit:end -->"))' "$SKILL_COPY15/assets/CLAUDE.md.tmpl"
 
 PLAN15="$(node "$SKILL_COPY15/scripts/install.mjs" plan --repo "$R15" --project-name "Scenario15" --slug scenario15 --mode upgrade 2>&1)"
 CONFLICTS15="$(echo "${PLAN15}" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['conflicts']))" 2>/dev/null || echo err)"
@@ -764,7 +765,8 @@ node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R38" --project-name "Scenar
 SKILL_COPY38="$WORK/skillcopy38"
 cp -R "$SKILL_DIR" "$SKILL_COPY38"
 printf '\n// UPDATE-MARKER-38\n' >> "$SKILL_COPY38/assets/scripts/worklog.mjs"
-printf '\nMY-CUSTOM-38\n' >> "$R38/CLAUDE.md"
+# orbit 구간 안을 고친다(구간 밖 수정은 이제 충돌이 아니다 — 시나리오 49).
+node -e 'const fs=require("fs");const f=process.argv[1];const t=fs.readFileSync(f,"utf8");fs.writeFileSync(f,t.replace("## 문서 볼트 경계","MY-CUSTOM-38\n## 문서 볼트 경계"))' "$R38/CLAUDE.md"
 UPD38="$(node "$SKILL_COPY38/scripts/install.mjs" update --repo "$R38" 2>/dev/null)"; UPD38_CODE=$?
 [ "${UPD38_CODE}" = "0" ] && pass "update 종료코드 0(충돌 있어도 미중단)" || fail "update 종료코드=${UPD38_CODE}"
 grep -q "UPDATE-MARKER-38" "$R38/scripts/worklog.mjs" && pass "update가 worklog.mjs 갱신" || fail "worklog.mjs 미갱신"
@@ -1153,6 +1155,48 @@ grep -q 'AGENTS.md' "$R48/CLAUDE.md" && fail "codex 꺼진 설치 CLAUDE.md가 A
 grep -q '^## 작업 일지' "$R48/CLAUDE.md" && pass "codex 꺼지면 작업 일지 절" || fail "작업 일지 절 없음"
 grep -q '^## 협업 (Codex와 턴제)' "$R48C/CLAUDE.md" && grep -q 'AGENTS.md' "$R48C/CLAUDE.md" && pass "codex 켜면 협업 절과 AGENTS.md" || fail "codex 설치 협업 절 오류"
 grep -q '{{' "$R48/CLAUDE.md" "$R48C/CLAUDE.md" && fail "치환되지 않은 자리표시자" || pass "자리표시자 모두 치환"
+
+echo ""
+echo "== 시나리오 49: CLAUDE.md orbit 관리 구간 =="
+R49="$WORK/scenario49"
+new_repo "$R49"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R49" --project-name "Scenario49" --slug scenario49 --mode new >/dev/null 2>&1
+grep -q '^<!-- orbit:begin' "$R49/CLAUDE.md" && grep -q '^<!-- orbit:end -->' "$R49/CLAUDE.md" && grep -q '^## 프로젝트 메모' "$R49/CLAUDE.md" && pass "새 설치: 관리 구간과 프로젝트 메모 절" || fail "관리 구간 표시 없음"
+node -p "Object.keys(require('$R49/.claude/orbit-manifest.json').blocks||{}).join(',')" | grep -q 'CLAUDE.md' && pass "매니페스트에 구간 해시" || fail "구간 해시 없음"
+SK49="$WORK/skillcopy49"; cp -R "$SKILL_DIR" "$SK49"
+node -e 'const fs=require("fs");const f=process.argv[1];const t=fs.readFileSync(f,"utf8");fs.writeFileSync(f,t.replace("<!-- orbit:end -->","NEW-RULE-49\n<!-- orbit:end -->"))' "$SK49/assets/CLAUDE.md.tmpl"
+printf '\n- 우리 지식 맵: docs/spec.md USER-49\n' >> "$R49/CLAUDE.md"
+U49="$(node "$SK49/scripts/install.mjs" update --repo "$R49" 2>/dev/null)"
+grep -q 'NEW-RULE-49' "$R49/CLAUDE.md" && grep -q 'USER-49' "$R49/CLAUDE.md" && pass "구간 밖을 고쳐도 새 구간이 들어가고 사용자 글 보존" || fail "구간 갱신 또는 보존 실패"
+echo "$U49" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d);process.exit(j.files.conflict===0?0:1)})' && pass "구간 밖 수정은 충돌 아님" || fail "구간 밖 수정이 충돌로 잡힘"
+node -e 'const fs=require("fs");const f=process.argv[1];const t=fs.readFileSync(f,"utf8");fs.writeFileSync(f,t.replace("NEW-RULE-49","NEW-RULE-49 INSIDE-EDIT-49"))' "$R49/CLAUDE.md"
+node -e 'const fs=require("fs");const f=process.argv[1];const t=fs.readFileSync(f,"utf8");fs.writeFileSync(f,t.replace("NEW-RULE-49","NEWER-RULE-49"))' "$SK49/assets/CLAUDE.md.tmpl"
+U49B="$(node "$SK49/scripts/install.mjs" update --repo "$R49" 2>/dev/null)"
+grep -q 'INSIDE-EDIT-49' "$R49/CLAUDE.md" && ! grep -q 'NEWER-RULE-49' "$R49/CLAUDE.md" && pass "구간 안을 고치면 덮지 않음" || fail "구간 안 수정이 덮어써짐"
+echo "$U49B" | grep -q 'orbit 구간 안을 고친 흔적' && pass "구간 안 수정은 충돌로 안내" || fail "구간 안 수정 안내 없음"
+# 구간 표시가 없는 옛 설치본(설치 당시 그대로) → 통째로 새 판
+R49O="$WORK/scenario49old"; new_repo "$R49O"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R49O" --project-name "Scenario49O" --slug scenario49o --mode new >/dev/null 2>&1
+node -e '
+const fs=require("fs"),crypto=require("crypto");const [f,m]=process.argv.slice(1);
+let t=fs.readFileSync(f,"utf8");t=t.replace(/^<!-- orbit:begin[^\n]*\n/m,"").replace(/\n<!-- orbit:end -->[\s\S]*$/,"\n");fs.writeFileSync(f,t);
+const man=JSON.parse(fs.readFileSync(m,"utf8"));man.files["CLAUDE.md"]="sha256:"+crypto.createHash("sha256").update(t).digest("hex");delete man.blocks;fs.writeFileSync(m,JSON.stringify(man,null,2));
+' "$R49O/CLAUDE.md" "$R49O/.claude/orbit-manifest.json"
+! grep -q 'orbit:begin' "$R49O/CLAUDE.md" && pass "옛 설치본 흉내(구간 없음)" || fail "옛 설치본 흉내 실패"
+node "$SKILL_DIR/scripts/install.mjs" update --repo "$R49O" >/dev/null 2>&1
+grep -q '^<!-- orbit:begin' "$R49O/CLAUDE.md" && pass "구간 없는 원본 설치본은 통째로 새 판(구간 생김)" || fail "옛 원본 설치본이 갱신되지 않음"
+# 구간 표시가 없고 사용자가 고친 옛 설치본 → 충돌 보존
+R49E="$WORK/scenario49edit"; new_repo "$R49E"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R49E" --project-name "Scenario49E" --slug scenario49e --mode new >/dev/null 2>&1
+node -e '
+const fs=require("fs"),crypto=require("crypto");const [f,m]=process.argv.slice(1);
+let t=fs.readFileSync(f,"utf8");t=t.replace(/^<!-- orbit:begin[^\n]*\n/m,"").replace(/\n<!-- orbit:end -->[\s\S]*$/,"\n");
+const man=JSON.parse(fs.readFileSync(m,"utf8"));man.files["CLAUDE.md"]="sha256:"+crypto.createHash("sha256").update(t).digest("hex");delete man.blocks;fs.writeFileSync(m,JSON.stringify(man,null,2));
+fs.writeFileSync(f,t+"\nOLD-USER-49\n");
+' "$R49E/CLAUDE.md" "$R49E/.claude/orbit-manifest.json"
+U49E="$(node "$SKILL_DIR/scripts/install.mjs" update --repo "$R49E" 2>/dev/null)"
+grep -q 'OLD-USER-49' "$R49E/CLAUDE.md" && ! grep -q 'orbit:begin' "$R49E/CLAUDE.md" && pass "구간 없고 고친 옛 설치본은 보존" || fail "고친 옛 설치본이 덮어써짐"
+echo "$U49E" | grep -q '구간을 붙여 넣으면' && pass "구간 붙여 넣기 안내" || fail "구간 안내 없음"
 
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
