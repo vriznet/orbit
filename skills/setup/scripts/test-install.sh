@@ -1739,6 +1739,54 @@ fi
 F61="$(env -u ORBIT_CODE_TOOLS ORBIT_CODE_TOOLS_DIR=/dev/null/orbit-ct node "$SKILL_DIR/scripts/install.mjs" code-tools 2>&1)"; F61_RC=$?
 [ "$F61_RC" = "1" ] && echo "$F61" | grep -q '코드 도구(tree-sitter) 설치 실패' && echo "$F61" | grep -q '다시 받기:' && pass "설치 실패를 조용히 넘기지 않고 알림" || fail "설치 실패 알림 이상"
 
+echo ""
+echo "== 시나리오 62: 큰 코드 파일 Read 안내(PreToolUse, 파일별 기억과 한 출력) =="
+if [ ! -f "$WORK/code-tools/wasm/tree-sitter.js" ]; then
+  echo "  ⚠️ 코드 도구가 없어(시나리오 61에서 받지 못함) 건너뜀"
+else
+R62="$WORK/scenario62"; new_repo "$R62"
+ORBIT_CODE_TOOLS_DIR="$WORK/code-tools" node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R62" --project-name "Scenario62" --slug scenario62 --mode new >/dev/null 2>&1
+grep -q '^## 코드 읽기' "$R62/CLAUDE.md" && pass "CLAUDE.md 코드 읽기 안내" || fail "코드 읽기 안내 없음"
+S62_OUT="$(cd "$R62" && CT62="$WORK/code-tools" node - <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd();
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+fs.mkdirSync('src', { recursive: true });
+const big = ['export class Big {'];
+for (let i = 0; i < 160; i += 1) big.push(`  m${i}() {`, `    return ${i};`, '  }');
+big.push('}', 'export function tail() {}');
+fs.writeFileSync('src/big.ts', big.join('\n') + '\n');
+fs.writeFileSync('src/small.ts', 'export const a = 1;\n');
+fs.writeFileSync('notes.md', Array.from({ length: 400 }, (_, i) => `줄 ${i}`).join('\n'));
+const pre = (session, file, extra = {}, env = {}) => {
+  const r = spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'pre-tool'], { input: JSON.stringify({ session_id: session, tool_name: 'Read', tool_input: { file_path: path.join(ROOT, file), ...extra } }), encoding: 'utf8', env: { ...process.env, ORBIT_CODE_TOOLS_DIR: process.env.CT62, ...env } });
+  return r.stdout ? JSON.parse(r.stdout).hookSpecificOutput : null;
+};
+const a = pre('s1', 'src/big.ts');
+ok(a && a.permissionDecision === undefined && /\[orbit 코드 개요\] src\/big\.ts은\(는\) \d+줄/.test(a.additionalContext), '큰 코드 파일 통째 읽기 → 개요 안내(권한 결정 없음)');
+ok(a && a.additionalContext.includes('class Big') && a.additionalContext.includes('code.mjs unfold src/big.ts') && a.additionalContext.includes('…외'), '개요 목록·unfold 안내·항목 상한');
+ok(a && a.additionalContext.length <= 3300, `안내 길이 상한(${a?.additionalContext.length})`);
+ok(pre('s1', 'src/big.ts') === null, '같은 세션·같은 파일은 한 번만');
+ok(pre('s2', 'src/big.ts', { offset: 1, limit: 50 }) === null, '범위를 준 Read는 안내 없음');
+ok(pre('s2', 'src/small.ts') === null, '작은 파일은 안내 없음');
+ok(pre('s2', 'notes.md') === null, 'Markdown 등 문서는 안내 없음');
+ok(pre('s3', 'src/big.ts', {}, { ORBIT_READ_OUTLINE_MIN_LINES: '0' }) === null, 'ORBIT_READ_OUTLINE_MIN_LINES=0 → 끔');
+// 파일별 기억과 한 출력으로
+fs.mkdirSync(path.join('.git', 'orbit-memory'), { recursive: true });
+fs.writeFileSync(path.join('.git', 'orbit-memory', 'tools.jsonl'), JSON.stringify({ v: 1, session: 'old', seq: 1, at: '2026-09-01T00:00:00Z', tool: 'Edit', file: 'src/big.ts' }) + '\n');
+const b = pre('s4', 'src/big.ts');
+ok(b && b.additionalContext.includes('[orbit 기억]') && b.additionalContext.includes('[orbit 코드 개요]'), '파일별 기억과 개요를 한 출력으로');
+const c = pre('s5', 'src/big.ts', {}, { ORBIT_CODE_TOOLS_DIR: path.join(ROOT, 'none') });
+ok(c && c.additionalContext.includes('코드 도구(tree-sitter)가 설치되지 않았습니다') && c.additionalContext.includes('다시 받기'), '도구가 없으면 다시 받는 법을 알림');
+const c2 = spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'pre-tool'], { input: JSON.stringify({ session_id: 's5', tool_name: 'Read', tool_input: { file_path: path.join(ROOT, 'src', 'big.ts') } }), encoding: 'utf8', env: { ...process.env, ORBIT_CODE_TOOLS_DIR: path.join(ROOT, 'none') } });
+ok(!c2.stdout.includes('설치되지 않았습니다'), '도구 없음 안내는 세션에 한 번');
+process.exit(failed ? 1 : 0);
+NODE
+)"; S62_RC=$?
+echo "${S62_OUT}"
+[ "${S62_RC}" = "0" ] || fail "시나리오 62 하위 항목 실패(위 ❌ 확인)"
+fi
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

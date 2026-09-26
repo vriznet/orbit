@@ -8,6 +8,7 @@
 //                    도구 색인에 덧붙인다(결정 6·7). 도구 출력은 복사하지 않는다.
 //   pre-tool         PreToolUse(Read·Edit·Write): 그 파일을 다룬 과거 턴을 '날짜 · 번호 · 한 줄' 목록으로
 //                    넣는다(본문 없음, 상세는 memory.mjs show). 같은 세션에서 파일마다 한 번(컴팩션 뒤 다시).
+//                    큰 코드 파일(기본 300줄)을 범위 없이 Read하면 개요와 '필요한 부분만 읽기' 안내도 함께 넣는다(막지 않음).
 // 결정: D-프로젝트-기억-분담(결정 3). 실패해도 컴팩션을 막지 않는다(종료 코드 2를 쓰지 않음).
 
 import fs from 'node:fs';
@@ -355,7 +356,38 @@ function fileMemory(rel) {
   return text.length > FILE_MEMORY_LIMIT ? `${text.slice(0, FILE_MEMORY_LIMIT - 1)}…` : text;
 }
 
-function preTool(input) {
+// 큰 코드 파일 읽기 안내 — 결정: D-코드개요-tree-sitter. 기준은 ORBIT_READ_OUTLINE_MIN_LINES(기본 300, 0이면 끔).
+const OUTLINE_ENTRIES = 60;
+const OUTLINE_LIMIT = 3000;
+function outlineMinLines() {
+  const value = Number(process.env.ORBIT_READ_OUTLINE_MIN_LINES);
+  return process.env.ORBIT_READ_OUTLINE_MIN_LINES !== undefined && process.env.ORBIT_READ_OUTLINE_MIN_LINES !== '' && Number.isFinite(value) && value >= 0 ? value : 300;
+}
+
+async function readGuide(input, rel, registry) {
+  const minimum = outlineMinLines();
+  const tool = input.tool_input || {};
+  if (!minimum || input.tool_name !== 'Read' || tool.offset !== undefined || tool.limit !== undefined) return null;
+  const code = await import('./code.mjs');
+  const lang = code.languageOf(rel);
+  if (!lang || ['markdown', 'yaml', 'json'].includes(lang)) return null; // 문서·설정은 통째로 읽는 일이 많다
+  const abs = path.resolve(ROOT, rel);
+  let lineCount;
+  try { lineCount = fs.readFileSync(abs, 'utf8').split('\n').length; } catch { return null; }
+  if (lineCount < minimum) return null;
+  try {
+    const result = await code.outlineOf(abs);
+    let outline = code.formatOutline(rel, result, { limit: OUTLINE_ENTRIES });
+    if (outline.length > OUTLINE_LIMIT) outline = `${outline.slice(0, OUTLINE_LIMIT - 1)}…`;
+    return `[orbit 코드 개요] ${rel}은(는) ${lineCount}줄입니다. 다음부터는 필요한 정의만 읽으세요: \`node scripts/code.mjs unfold ${rel} <이름>\` 또는 Read의 offset/limit.\n${outline}`;
+  } catch (error) {
+    if (registry.toolsWarned) return null; // 도구가 없다는 안내는 세션에 한 번만
+    registry.toolsWarned = true;
+    return `[orbit 코드 개요] ${error.message.split('\n')[0]} — 다시 받기: orbit update 또는 install.mjs code-tools`;
+  }
+}
+
+async function preTool(input) {
   if (!FILE_TOOLS.has(input.tool_name)) return;
   const file = toolFilePath({ input: input.tool_input });
   if (!file) return;
@@ -364,14 +396,26 @@ function preTool(input) {
 
   const registryFile = injectedRegistryPath(input.session_id);
   const registry = (registryFile && readJson(registryFile)) || { files: [] };
+  registry.outlined = registry.outlined || [];
+  let changed = false;
   if (!registry.files.includes(rel)) {
     const memory = fileMemory(rel);
     if (memory) {
       parts.push(memory);
       registry.files.push(rel);
-      if (registryFile) writePrivateFile(registryFile, `${JSON.stringify(registry)}\n`);
+      changed = true;
     }
   }
+  if (!registry.outlined.includes(rel)) {
+    const warnedBefore = Boolean(registry.toolsWarned);
+    const guide = await readGuide(input, rel, registry);
+    if (guide) {
+      parts.push(guide);
+      if (!guide.includes('다시 받기')) registry.outlined.push(rel);
+      changed = true;
+    } else if (registry.toolsWarned !== warnedBefore) changed = true;
+  }
+  if (changed && registryFile) writePrivateFile(registryFile, `${JSON.stringify(registry)}\n`);
   if (!parts.length) return;
   process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: parts.join('\n\n') } })}\n`);
 }
@@ -390,10 +434,10 @@ if (isMain) {
     process.stderr.write(`사용법: memory-hook <${Object.keys(MODES).join('|')}>\n`);
     process.exit(1);
   }
-  try {
-    MODES[mode](readHookInput());
-  } catch (error) {
-    process.stderr.write(`orbit 기억 훅(${mode}) 실패: ${error.message}\n`);
-    process.exit(1);
-  }
+  Promise.resolve()
+    .then(() => MODES[mode](readHookInput()))
+    .catch((error) => {
+      process.stderr.write(`orbit 기억 훅(${mode}) 실패: ${error.message}\n`);
+      process.exit(1);
+    });
 }
