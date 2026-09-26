@@ -27,7 +27,9 @@ import { execFileSync } from 'node:child_process';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const LOG = path.join(ROOT, '{{DOCS_DIR}}', 'worklog.md');
 const STATE = path.join(ROOT, '{{DOCS_DIR}}', 'worklog-state.json');
-const WHO = ['claude', 'codex'];
+// 작성자 이름: claude·codex 말고도 같은 저장소를 쓰는 다른 에이전트(hermes, opencode 등)가
+// 제 이름으로 적게 한다. 예전엔 둘만 받아 다른 에이전트가 claude로 적었다. 책갈피도 이름별이다.
+const AGENT_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 
 // 동시 실행(파일 잠금)과 손상 파일 감지에 쓰는 최소 헬퍼. 외부 의존성 없이 fs만 쓴다.
 function sleepSync(ms) {
@@ -451,8 +453,8 @@ function gitCommitAll(msg) {
 }
 
 const [cmd, agent, a, b] = argv;
-if (!WHO.includes(agent)) {
-  process.stderr.write('작성자는 claude 또는 codex 여야 합니다.\n');
+if (!AGENT_NAME.test(agent || '')) {
+  process.stderr.write('작성자는 영문 소문자로 시작하는 이름이어야 합니다(예: claude, codex, hermes).\n');
   process.exit(1);
 }
 if (cmd === 'append') {
@@ -465,6 +467,6 @@ if (cmd === 'append') {
 } else if (cmd === 'catchup') catchup(agent);
 else if (cmd === 'recent') recent(recentMode);
 else {
-  process.stderr.write('사용법: worklog <append|summary|catchup|recent> <claude|codex> ... [--commit "메시지"] [--session-id ID --turn-token TOKEN | --session-id ID --turn-id N] [--why 판단] [--found 발견] [--mode compact]\n');
+  process.stderr.write('사용법: worklog <append|summary|catchup|recent> <작성자(claude|codex|…)> ... [--commit "메시지"] [--session-id ID --turn-token TOKEN | --session-id ID --turn-id N] [--why 판단] [--found 발견] [--mode compact]\n');
   process.exit(1);
 }

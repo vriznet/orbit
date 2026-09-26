@@ -1133,6 +1133,27 @@ echo '{broken' > "$R47/scenario47-docs/worklog-state.json"
 ERR47="$(cd "$R47" && node scripts/worklog.mjs catchup claude 2>&1 >/dev/null)"; RC47B=$?
 [ "$RC47B" != "0" ] && [ "$RC47B" != "2" ] && [ -n "$ERR47" ] && pass "상태 파일이 깨지면 오류를 알리되 막지 않음(rc=${RC47B})" || fail "깨진 상태에서 rc=${RC47B}·stderr 없음"
 
+echo ""
+echo "== 시나리오 48: 설치 버전 기록·작성자 이름·codex 여부별 협업 문구 =="
+R48="$WORK/scenario48"; R48C="$WORK/scenario48c"
+new_repo "$R48"; new_repo "$R48C"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R48" --project-name "Scenario48" --slug scenario48 --mode new >/dev/null 2>&1
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R48C" --project-name "Scenario48C" --slug scenario48c --mode new --codex >/dev/null 2>&1
+PV48="$(node -p "require('$SKILL_DIR/../../.claude-plugin/plugin.json').version")"
+MV48="$(node -p "require('$R48/.claude/orbit-manifest.json').skillVersion")"
+[ "$MV48" = "$PV48" ] && [ "$MV48" != "0.0.0" ] && pass "매니페스트에 플러그인 버전 기록(${MV48})" || fail "skillVersion=${MV48}(플러그인 ${PV48} 기대)"
+(cd "$R48" && node scripts/worklog.mjs append hermes "hq" "hr" >/dev/null 2>&1)
+grep -q '^## \[#1\] .* · hermes · with:user' "$R48/scenario48-docs/worklog.md" && pass "다른 에이전트 이름으로 기록" || fail "hermes 기록 실패"
+(cd "$R48" && node scripts/worklog.mjs append "Bad Name" "q" "r" >/dev/null 2>&1); BAD48=$?
+[ "$BAD48" = "1" ] && pass "잘못된 이름 거부" || fail "잘못된 이름 허용(rc=${BAD48})"
+(cd "$R48" && node scripts/worklog.mjs append claude "cq" "cr" >/dev/null 2>&1)
+CU48="$(cd "$R48" && node scripts/worklog.mjs catchup hermes)"
+echo "$CU48" | grep -q 'cq' && pass "이름별 책갈피로 따라잡기" || fail "hermes 따라잡기 실패"
+grep -q 'AGENTS.md' "$R48/CLAUDE.md" && fail "codex 꺼진 설치 CLAUDE.md가 AGENTS.md를 가리킴" || pass "codex 꺼지면 AGENTS.md 언급 없음"
+grep -q '^## 작업 일지' "$R48/CLAUDE.md" && pass "codex 꺼지면 작업 일지 절" || fail "작업 일지 절 없음"
+grep -q '^## 협업 (Codex와 턴제)' "$R48C/CLAUDE.md" && grep -q 'AGENTS.md' "$R48C/CLAUDE.md" && pass "codex 켜면 협업 절과 AGENTS.md" || fail "codex 설치 협업 절 오류"
+grep -q '{{' "$R48/CLAUDE.md" "$R48C/CLAUDE.md" && fail "치환되지 않은 자리표시자" || pass "자리표시자 모두 치환"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

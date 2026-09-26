@@ -293,7 +293,10 @@ const options = parseArgs(process.argv.slice(2));
 const repo = path.resolve(options.repo);
 if (!fs.existsSync(path.join(repo, '.git'))) die(`Git 저장소 루트가 아닙니다: ${repo}`);
 
-const pluginJson = readJsonBestEffort(path.join(SKILL_ROOT, '.claude-plugin/plugin.json')) || {};
+// plugin.json은 플러그인 루트(skills/setup의 두 단계 위)에 있다. 예전에는 SKILL_ROOT 아래에서 찾아
+// 모든 설치본이 0.0.0으로 기록됐다. 옛 배치(스킬 폴더 안)도 받아 준다.
+const pluginJson = readJsonBestEffort(path.join(SKILL_ROOT, '..', '..', '.claude-plugin/plugin.json'))
+  || readJsonBestEffort(path.join(SKILL_ROOT, '.claude-plugin/plugin.json')) || {};
 const skillVersion = pluginJson.version || '0.0.0';
 // 이관 호환: 옛 harness-setup이 남긴 .claude/harness-manifest.json도 설치로 인정한다(흡수).
 // orbit-manifest.json이 있으면 우선이며, 흡수한 경우 update 끝에서 옛 파일을 지우고
@@ -355,11 +358,18 @@ if (options.mode === 'upgrade' && (!hasDocs || legacyIsHarnessVault)) {
   die('upgrade 모드는 <slug>-docs/만 존재해야 합니다.');
 }
 
+// CLAUDE.md 협업 절은 codex 모듈 여부에 맞춘다. 꺼진 설치본에 없는 AGENTS.md를 가리키지 않게 한다.
+const collabHeading = options.codex ? '협업 (Codex와 턴제)' : '작업 일지 (세션·에이전트 사이 기록)';
+const collabIntro = options.codex
+  ? `Claude와 Codex는 대화 맥락을 공유 못 한다. \`${docsName}/worklog.md\`로 서로의 "왜"를 잇는다(Codex 진입점 \`AGENTS.md\`). 턴 시작 따라잡기는 훅이 자동 처리. 일지는 **덧붙이기만**(이견은 새 항목 "Codex의 #N에 반대 …").`
+  : `새 세션과 다른 에이전트는 이 대화를 보지 못한다. \`${docsName}/worklog.md\`에 턴마다 물음과 결과를 남겨 "왜"를 잇는다. 세션 시작과 컴팩션 직후에는 훅이 최근 기록을 넣는다. 일지는 **덧붙이기만**(이견은 새 항목 "#N에 반대 …").`;
 const vars = {
   PROJECT_NAME: options['project-name'],
   PROJECT_SLUG: options.slug,
   DOCS_DIR: docsName,
   REPO_ABS_PATH: repo,
+  COLLAB_HEADING: collabHeading,
+  COLLAB_INTRO: collabIntro,
 };
 const legacyVars = { ...vars, DOCS_DIR: 'docs' };
 const conflicts = [];
