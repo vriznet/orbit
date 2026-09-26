@@ -484,6 +484,7 @@ const directAssets = [
   ['scripts/worktree-merge-inspect.mjs', path.join(repo, 'scripts/worktree-merge-inspect.mjs'), null],
   ['scripts/memory-lib.mjs', path.join(repo, 'scripts/memory-lib.mjs'), null],
   ['scripts/redact.mjs', path.join(repo, 'scripts/redact.mjs'), null],
+  ['scripts/memory.mjs', path.join(repo, 'scripts/memory.mjs'), null],
   ['scripts/memory-hook.mjs', path.join(repo, 'scripts/memory-hook.mjs'), null],
   ['scripts/claude-catchup.sh', path.join(repo, 'scripts/claude-catchup.sh'), null],
 ];
@@ -576,6 +577,7 @@ const desiredScripts = {
   'wiki:fix': 'node scripts/wiki-links.mjs fix',
   'wiki:context': 'node scripts/wiki-context.mjs',
   'wiki': 'node scripts/wiki.mjs',
+  'memory': 'node scripts/memory.mjs',
 };
 if (options.codex) desiredScripts['codex-catchup'] = 'bash scripts/codex-catchup.sh';
 

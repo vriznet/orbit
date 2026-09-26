@@ -1436,6 +1436,61 @@ NODE
 echo "${S54_OUT}"
 [ "${S54_RC}" = "0" ] || fail "시나리오 54 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 55: 옛 기억 검색 명령(memory.mjs search) =="
+R55="$WORK/scenario55"
+new_repo "$R55"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R55" --project-name "Scenario55" --slug scenario55 --mode new >/dev/null 2>&1
+grep -q '"memory": "node scripts/memory.mjs"' "$R55/package.json" && pass "package.json memory 스크립트" || fail "memory 스크립트 없음"
+grep -q 'memory.mjs search' "$R55/CLAUDE.md" && pass "CLAUDE.md 검색 안내" || fail "CLAUDE.md 검색 안내 없음"
+S55_OUT="$(cd "$R55" && node - <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const D = 'scenario55-docs';
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const put = (rel, text) => { fs.mkdirSync(path.dirname(rel), { recursive: true }); fs.writeFileSync(rel, text); };
+put(`${D}/decisions/D-옛결정-260101-000000.md`, '# D-옛결정 — 캐시는 Redis로\n\n> ⚠️ [[decisions/D-새결정-260301-000000]]으로 대체됨\n\n- 상태: 확정\n\n캐시 저장소는 Redis를 쓴다. 기억 계층 설계.\n');
+put(`${D}/decisions/D-새결정-260301-000000.md`, '# D-새결정 — 캐시는 SQLite로\n\n- 상태: 확정\n\n캐시 저장소는 SQLite를 쓴다. 기억 계층 설계를 바꾼다.\n');
+put(`${D}/wiki/캐시-조사.md`, '---\ntitle: "캐시 조사"\nupdated: 2026-02-01\n---\n\n# 캐시 조사\n캐시 캐시 캐시 캐시 캐시 — 한 낱말만 여러 번.\n');
+put(`${D}/wiki/기억-정리.md`, '---\ntitle: "기억 정리"\nupdated: 2026-01-15\n---\n\n# 기억 정리\n캐시와 기억을 함께 다룬 노트.\n');
+for (const [q, r] of [['캐시 방식 논의', 'Redis 버림'], ['날씨', '맑음'], ['기억 캐시 정리', '두 낱말 모두']]) spawnSync(process.execPath, ['scripts/worklog.mjs', 'append', 'claude', q, r]);
+const mem = path.join('.git', 'orbit-memory'); fs.mkdirSync(mem, { recursive: true });
+const rec = (seq, user, assistant, at) => JSON.stringify({ v: 1, at, session: 'sessA', worktree: process.cwd(), seq, user, assistant, files: ['src/cache.js'], filesEstimated: true, worklog: null });
+fs.writeFileSync(path.join(mem, 'dialogue.jsonl'), [
+  rec(1, '앞 턴 질문', '앞 턴 답', '2026-09-01T00:00:00Z'),
+  rec(2, '그 캐시 기억 방식 왜 버렸지?', 'Redis는 운영 부담 때문에 버렸다', '2026-09-01T00:10:00Z'),
+  rec(3, '뒤 턴 질문', '뒤 턴 답', '2026-09-01T00:20:00Z'),
+].join('\n') + '\n');
+const run = (...args) => spawnSync(process.execPath, ['scripts/memory.mjs', 'search', ...args], { encoding: 'utf8' });
+const out = run('캐시 기억').stdout;
+const order = ['## ADR', '## 위키', '## worklog', '## 대화 글 사본'].map((h) => out.indexOf(h));
+ok(order.every((i) => i >= 0) && order.every((v, i) => i === 0 || v > order[i - 1]), '출처 순서 ADR → 위키 → worklog → 대화 사본');
+const adr = out.slice(out.indexOf('## ADR'), out.indexOf('## 위키'));
+ok(adr.indexOf('D-새결정') < adr.indexOf('D-옛결정') && adr.includes('대체됨 — 참고만'), '대체된 ADR은 뒤로·표시');
+const wiki = out.slice(out.indexOf('## 위키'), out.indexOf('## worklog'));
+ok(wiki.indexOf('기억 정리') > -1 && (wiki.indexOf('캐시 조사') === -1 || wiki.indexOf('기억 정리') < wiki.indexOf('캐시 조사')), '같은 낱말 반복보다 서로 다른 검색어 수가 먼저');
+const wl = out.slice(out.indexOf('## worklog'), out.indexOf('## 대화 글 사본'));
+ok(wl.indexOf('기억 캐시 정리') > -1 && wl.indexOf('기억 캐시 정리') < wl.indexOf('캐시 방식 논의') && !wl.includes('날씨'), 'worklog 순위·안 맞는 항목 제외');
+const dl = out.slice(out.indexOf('## 대화 글 사본'));
+ok(dl.includes('(앞 턴)') && dl.includes('앞 턴 질문') && dl.includes('(뒤 턴)') && dl.includes('뒤 턴 질문') && dl.includes('운영 부담'), '대화 사본은 앞뒤 1턴과 함께');
+ok(dl.includes('src/cache.js'), '바뀐 파일(추정) 표시');
+ok(run('기억').stdout.includes('## ADR'), '두 글자 한국어 낱말도 찾음');
+ok(run('REDIS').stdout.includes('Redis'), '대소문자 무시');
+const only = run('캐시', '--source', 'worklog').stdout;
+ok(only.includes('## worklog') && !only.includes('## ADR') && !only.includes('## 대화'), '--source로 출처 제한');
+ok(run('캐시', '--limit', '1').stdout.split('\n').filter((l) => /^- \[/.test(l)).length === 4, '--limit 1 → 출처마다 1건');
+const none = run('존재하지않는낱말');
+ok(none.status === 0 && none.stdout.includes('찾은 것이 없습니다'), '결과 없음 안내');
+ok(out.length <= 12100, `출력 상한(${out.length})`);
+const j = JSON.parse(run('캐시', '--json').stdout);
+ok(Array.isArray(j.groups) && j.groups[0].source === 'adr', '--json 출력');
+fs.rmSync(path.join(mem, 'dialogue.jsonl'));
+ok(run('캐시').status === 0, '대화 사본이 없어도 동작');
+process.exit(failed ? 1 : 0);
+NODE
+)"; S55_RC=$?
+echo "${S55_OUT}"
+[ "${S55_RC}" = "0" ] || fail "시나리오 55 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0
