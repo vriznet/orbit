@@ -1198,6 +1198,18 @@ U49E="$(node "$SKILL_DIR/scripts/install.mjs" update --repo "$R49E" 2>/dev/null)
 grep -q 'OLD-USER-49' "$R49E/CLAUDE.md" && ! grep -q 'orbit:begin' "$R49E/CLAUDE.md" && pass "구간 없고 고친 옛 설치본은 보존" || fail "고친 옛 설치본이 덮어써짐"
 echo "$U49E" | grep -q '구간을 붙여 넣으면' && pass "구간 붙여 넣기 안내" || fail "구간 안내 없음"
 
+echo ""
+echo "== 시나리오 50: CLAUDE.md 요약 지시·기억 저장 기준 =="
+R50="$WORK/scenario50"
+new_repo "$R50"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R50" --project-name "Scenario50" --slug scenario50 --mode new >/dev/null 2>&1
+BLOCK50="$(sed -n '/^<!-- orbit:begin/,/^<!-- orbit:end -->/p' "$R50/CLAUDE.md")"
+echo "$BLOCK50" | grep -q '^## Compact instructions' && pass "Compact instructions 절이 관리 구간 안에 있음" || fail "Compact instructions 절 없음"
+echo "$BLOCK50" | grep -q '버린 대안과 버린 이유' && echo "$BLOCK50" | grep -q '정확한 수치' && echo "$BLOCK50" | grep -q '아직 답이 없는 질문' && pass "요약 지시에 이유·수치·미결 질문" || fail "요약 지시 항목 누락"
+echo "$BLOCK50" | grep -q '^## 기억 저장 기준' && echo "$BLOCK50" | grep -q '자동 기억(MEMORY.md)' && pass "자동 기억 저장 기준 절" || fail "자동 기억 기준 없음"
+LINES50="$(wc -l < "$R50/CLAUDE.md" | tr -d ' ')"
+[ "$LINES50" -le 200 ] && pass "CLAUDE.md 200줄 이하(${LINES50})" || fail "CLAUDE.md가 200줄 초과(${LINES50})"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0
