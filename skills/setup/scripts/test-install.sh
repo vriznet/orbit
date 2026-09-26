@@ -1532,6 +1532,50 @@ NODE
 echo "${S56_OUT}"
 [ "${S56_RC}" = "0" ] || fail "시나리오 56 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 57: 도구 활동 색인(tools.jsonl)과 검색 =="
+R57="$WORK/scenario57"
+new_repo "$R57"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R57" --project-name "Scenario57" --slug scenario57 --mode new >/dev/null 2>&1
+S57_OUT="$(cd "$R57" && node - <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd();
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const key = 'ghp_' + 'Zz9Y'.repeat(9);
+const T = path.join(ROOT, '..', 't57.jsonl');
+const use = (id, name, input) => ({ type: 'tool_use', id, name, input });
+const lines = [
+  { type: 'user', promptId: 'p1', message: { role: 'user', content: '캐시 모듈을 고쳐 줘' } },
+  { type: 'assistant', promptId: 'p1', timestamp: '2026-09-26T01:00:00Z', message: { role: 'assistant', content: [
+    use('a', 'Read', { file_path: path.join(ROOT, 'src', 'cache.js') }),
+    use('b', 'Edit', { file_path: path.join(ROOT, 'src', 'cache.js'), old_string: 'x', new_string: 'y' }),
+    use('c', 'Bash', { command: `git push https://u:${key}@github.com/x/y.git` }),
+    use('d', 'Grep', { pattern: 'TTL_SECONDS', path: 'src' }),
+    use('e', 'Agent', { subagent_type: 'orbit:clean-subagent', prompt: '조사' }),
+  ] } },
+  { type: 'user', promptId: 'p1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'FILE-CONTENT-SHOULD-NOT-BE-COPIED' }] } },
+  { type: 'assistant', promptId: 'p1', message: { role: 'assistant', content: [{ type: 'text', text: '고쳤습니다.' }] } },
+];
+fs.writeFileSync(T, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'stop'], { input: JSON.stringify({ session_id: 's57', transcript_path: T }), encoding: 'utf8' });
+const file = path.join(ROOT, '.git', 'orbit-memory', 'tools.jsonl');
+const recs = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse) : [];
+ok(recs.length === 5, `도구 사용 5줄(${recs.length})`);
+ok(recs.filter((r) => r.file === 'src/cache.js').length === 2, 'Read·Edit 대상 파일은 상대 경로');
+const bash = recs.find((r) => r.tool === 'Bash');
+ok(bash && !bash.command.includes(key) && bash.command.includes('[REDACTED]'), 'Bash 명령 속 비밀값 가림');
+ok(recs.find((r) => r.tool === 'Grep')?.pattern === 'TTL_SECONDS' && recs.find((r) => r.tool === 'Agent')?.agent === 'orbit:clean-subagent', 'Grep 패턴·서브에이전트 종류');
+ok(!fs.readFileSync(file, 'utf8').includes('FILE-CONTENT-SHOULD-NOT-BE-COPIED'), '도구 출력은 복사하지 않음');
+ok(recs.every((r) => r.session === 's57' && r.seq === 1) && (fs.statSync(file).mode & 0o777) === 0o600, '세션·턴 번호·권한 600');
+const out = spawnSync(process.execPath, ['scripts/memory.mjs', 'search', 'cache.js'], { encoding: 'utf8' }).stdout;
+ok(out.includes('## 도구 활동') && out.includes('Edit src/cache.js'), '검색이 도구 활동을 찾음');
+ok(out.indexOf('## 대화 글 사본') === -1 || out.indexOf('## 대화 글 사본') < out.indexOf('## 도구 활동'), '도구 활동은 대화 사본 뒤');
+process.exit(failed ? 1 : 0);
+NODE
+)"; S57_RC=$?
+echo "${S57_OUT}"
+[ "${S57_RC}" = "0" ] || fail "시나리오 57 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

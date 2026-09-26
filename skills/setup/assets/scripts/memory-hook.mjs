@@ -4,7 +4,8 @@
 //   compact-restore  SessionStart(compact): 상태 파일 + worklog 최근 기록(컴팩션 전 기록)을 주입
 //   postcompact      PostCompact: 컴팩션 요약을 저장만 한다(측정·점검용, 주입 안 함)
 //   turn-start       UserPromptSubmit: 턴 시작 git 상태 지문(바뀐 파일 추정용)
-//   stop             Stop: 이번 턴의 사람·AI 글을 가려 대화 글 사본에 덧붙인다(결정 6)
+//   stop             Stop: 이번 턴의 사람·AI 글을 가려 대화 글 사본에, 도구 사용(이름·대상 파일·Bash 명령 앞부분)을
+//                    도구 색인에 덧붙인다(결정 6·7). 도구 출력은 복사하지 않는다.
 // 결정: D-프로젝트-기억-분담(결정 3). 실패해도 컴팩션을 막지 않는다(종료 코드 2를 쓰지 않음).
 
 import fs from 'node:fs';
@@ -186,6 +187,26 @@ function worklogEntry(sessionId) {
   return state && !state.pending && Number.isFinite(state.entry) ? state.entry : null;
 }
 
+function appendPrivate(file, records) {
+  fs.appendFileSync(file, records.map((record) => `${JSON.stringify(record)}\n`).join(''), { mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch {}
+}
+
+// 도구 한 번 사용 = 색인 한 줄: 도구 이름, 대상 파일(프로젝트 안이면 상대 경로), Bash 명령 앞부분(가림).
+function toolActivity(use, at) {
+  const input = use.input || {};
+  const file = toolFilePath(use);
+  const record = { at: at || new Date().toISOString(), tool: String(use.name || '') };
+  if (file) {
+    const rel = path.relative(ROOT, path.resolve(ROOT, file));
+    record.file = rel.startsWith('..') ? path.resolve(ROOT, file) : rel;
+  }
+  if (use.name === 'Bash' && input.command) record.command = redactPrefix(String(input.command).replace(/\s+/g, ' '), 200);
+  if (input.pattern && (use.name === 'Grep' || use.name === 'Glob')) record.pattern = redactPrefix(String(input.pattern), 120);
+  if (use.name === 'Agent' && input.subagent_type) record.agent = String(input.subagent_type);
+  return record;
+}
+
 const digest = (text) => crypto.createHash('sha256').update(String(text)).digest('hex').slice(0, 16);
 
 function stop(input) {
@@ -210,6 +231,7 @@ function stop(input) {
 
     const user = [];
     const assistant = [];
+    const tools = [];
     const promptIds = new Set();
     let skippedLast = false;
     for (const entry of entries) {
@@ -218,6 +240,7 @@ function stop(input) {
         const text = textOf(entry).trim();
         if (!isNotification(text)) user.push(text);
       } else if (entry?.type === 'assistant') {
+        for (const use of toolUses(entry)) tools.push(toolActivity(use, entry.timestamp));
         const text = textOf(entry).trim();
         if (!text) continue;
         // 지난번에 last_assistant_message로 먼저 담은 글이면 한 번 건너뛴다.
@@ -231,7 +254,7 @@ function stop(input) {
     if (last && !assistant.includes(last) && digest(last) !== cursor?.lastFinal) { assistant.push(last); pendingLast = digest(last); }
     const lastFinal = last && (assistant.includes(last)) ? digest(last) : cursor?.lastFinal || null;
 
-    const seq = (cursor?.seq || 0) + (user.length || assistant.length ? 1 : 0);
+    const seq = (cursor?.seq || 0) + (user.length || assistant.length || tools.length ? 1 : 0);
     const entry = worklogEntry(input.session_id);
     if (user.length || assistant.length) {
       const record = {
@@ -248,9 +271,11 @@ function stop(input) {
         filesEstimated: true,
         worklog: entry !== null && entry !== cursor?.lastEntry ? entry : null,
       };
-      const dialogue = path.join(shared, 'dialogue.jsonl');
-      fs.appendFileSync(dialogue, `${JSON.stringify(record)}\n`, { mode: 0o600 });
-      try { fs.chmodSync(dialogue, 0o600); } catch {}
+      appendPrivate(path.join(shared, 'dialogue.jsonl'), [record]);
+    }
+    if (tools.length) {
+      const base = { v: 1, session: String(input.session_id || ''), worktree: ROOT.replace(/\/$/, ''), seq, worklog: entry !== null && entry !== cursor?.lastEntry ? entry : null };
+      appendPrivate(path.join(shared, 'tools.jsonl'), tools.map((tool) => ({ ...base, ...tool })));
     }
     cursors[key] = {
       offset: next,

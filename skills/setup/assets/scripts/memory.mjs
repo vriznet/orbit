@@ -3,7 +3,7 @@
 // (필수 도구는 git·Node뿐, DB 없음). 결정: D-프로젝트-기억-분담(결정 6·8).
 //
 // 명령:
-//   search "<검색어>" [--limit N] [--source adr,wiki,worklog,dialogue] [--json]
+//   search "<검색어>" [--limit N] [--source adr,wiki,worklog,dialogue,tools] [--json]
 //   forget "<문구>" [--apply]   /forget 스킬이 부른다. 기본은 미리 보기, --apply면 orbit 사본에서 지운다
 //
 // 순위: 서로 다른 검색어가 몇 개 맞았는지 → 최근성. 같은 낱말이 여러 번 나오는 긴 글이
@@ -17,8 +17,8 @@ import { clip, git, sharedMemoryDir, withLock, writePrivateFile } from './memory
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DOCS = path.join(ROOT, '{{DOCS_DIR}}');
-const SOURCES = ['adr', 'wiki', 'worklog', 'dialogue'];
-const SOURCE_TITLES = { adr: 'ADR(결정)', wiki: '위키', worklog: 'worklog', dialogue: '대화 글 사본' };
+const SOURCES = ['adr', 'wiki', 'worklog', 'dialogue', 'tools'];
+const SOURCE_TITLES = { adr: 'ADR(결정)', wiki: '위키', worklog: 'worklog', dialogue: '대화 글 사본', tools: '도구 활동' };
 const OUTPUT_LIMIT = 12000;
 const SNIPPET_LINES = 3;
 const LINE_LIMIT = 220;
@@ -107,9 +107,9 @@ function searchWorklog(words) {
     }));
 }
 
-function readDialogue() {
+function readShared(name) {
   const shared = sharedMemoryDir(ROOT);
-  const file = shared ? path.join(shared, 'dialogue.jsonl') : null;
+  const file = shared ? path.join(shared, name) : null;
   if (!file || !fs.existsSync(file)) return [];
   const records = [];
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
@@ -117,6 +117,27 @@ function readDialogue() {
     try { records.push(JSON.parse(line)); } catch {}
   }
   return records;
+}
+
+function readDialogue() {
+  return readShared('dialogue.jsonl');
+}
+
+// 도구 활동: 이름·파일·명령·패턴에서 찾는다. 같은 턴의 여러 줄은 한 결과로 묶는다.
+function searchTools(words) {
+  const turns = new Map();
+  for (const record of readShared('tools.jsonl')) {
+    const key = `${record.session}#${record.seq}`;
+    if (!turns.has(key)) turns.set(key, { source: 'tools', time: 0, records: [] });
+    const turn = turns.get(key);
+    turn.records.push(record);
+    turn.time = Math.max(turn.time, Date.parse(record.at) || 0);
+  }
+  return [...turns.values()].map((turn) => {
+    const hits = turn.records.filter((r) => score([r.tool, r.file, r.command, r.pattern, r.agent].filter(Boolean).join(' '), words) > 0);
+    const text = turn.records.map((r) => [r.tool, r.file, r.command, r.pattern, r.agent].filter(Boolean).join(' ')).join('\n');
+    return { ...turn, score: score(text, words), hits };
+  });
 }
 
 function searchDialogue(words) {
@@ -140,7 +161,7 @@ function searchDialogue(words) {
   });
 }
 
-const SEARCHERS = { adr: searchAdr, wiki: searchWiki, worklog: searchWorklog, dialogue: searchDialogue };
+const SEARCHERS = { adr: searchAdr, wiki: searchWiki, worklog: searchWorklog, dialogue: searchDialogue, tools: searchTools };
 
 function rank(items) {
   return items
@@ -163,6 +184,13 @@ function formatItem(item, total) {
     return [`- ${mark} ${item.ref} — ${item.title}${flag}`, ...item.lines.map((line) => `    > ${line}`)].join('\n');
   }
   if (item.source === 'worklog') return `- ${mark} worklog [${item.ref}]\n    ${item.text.replace(/\n/g, '\n    ')}`;
+  if (item.source === 'tools') {
+    const first = item.records[0];
+    const head = `- ${mark} ${String(first.at || '').slice(0, 16).replace('T', ' ')} · 세션 ${String(first.session || '').slice(0, 8)} · 턴 ${first.seq}${first.worklog ? ` · worklog #${first.worklog}` : ''} · 도구 ${item.records.length}회`;
+    const lines = (item.hits.length ? item.hits : item.records).slice(0, 5)
+      .map((r) => `    ${r.tool}${r.file ? ` ${r.file}` : ''}${r.command ? ` $ ${clip(r.command, 160)}` : ''}${r.pattern ? ` /${r.pattern}/` : ''}${r.agent ? ` (${r.agent})` : ''}`);
+    return [head, ...lines].join('\n');
+  }
   const r = item.record;
   const head = `- ${mark} ${String(r.at || '').slice(0, 16).replace('T', ' ')} · 세션 ${String(r.session || '').slice(0, 8)} · ${path.basename(String(r.worktree || ''))}${r.worklog ? ` · worklog #${r.worklog}` : ''}${r.files?.length ? ` · 바뀐 파일(추정) ${r.files.slice(0, 5).join(', ')}` : ''}`;
   const parts = [head];
@@ -314,7 +342,7 @@ try {
   } else if (command === 'forget') {
     forget(rest.join(' '), { apply: applyFlag });
   } else {
-    process.stderr.write('사용법: memory.mjs search "<검색어>" [--limit N] [--source adr,wiki,worklog,dialogue] [--json]\n       memory.mjs forget "<문구>" [--apply]\n');
+    process.stderr.write('사용법: memory.mjs search "<검색어>" [--limit N] [--source adr,wiki,worklog,dialogue,tools] [--json]\n       memory.mjs forget "<문구>" [--apply]\n');
     process.exit(1);
   }
 } catch (error) {
