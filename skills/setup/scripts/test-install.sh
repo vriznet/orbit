@@ -1105,6 +1105,34 @@ NODE
 echo "${S46_OUT}"
 [ "${S46_RC}" = "0" ] || fail "시나리오 46 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 47: worklog 훅 배선이 오류를 숨기지 않음 =="
+R47="$WORK/scenario47"
+new_repo "$R47"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R47" --project-name "Scenario47" --slug scenario47 --mode new >/dev/null 2>&1
+grep -q '2>/dev/null || true' "$R47/.claude/settings.json" && fail "새 설치에 오류 숨김 배선이 남음" || pass "새 설치는 오류를 숨기지 않음"
+# 옛 설치본 흉내: 오류 숨김 배선 + 사용자 훅 하나
+node -e '
+const fs = require("fs"); const f = process.argv[1];
+const s = JSON.parse(fs.readFileSync(f, "utf8"));
+for (const ev of ["SessionStart", "UserPromptSubmit"]) for (const g of s.hooks[ev]) for (const h of g.hooks)
+  if (/worklog\.mjs\\?" (recent|catchup)/.test(h.args[1])) h.args[1] += " 2>/dev/null || true";
+s.hooks.SessionStart.push({ hooks: [{ type: "command", command: "echo user-hook-47" }] });
+fs.writeFileSync(f, JSON.stringify(s, null, 2));
+' "$R47/.claude/settings.json"
+[ "$(grep -c '2>/dev/null || true' "$R47/.claude/settings.json")" = "2" ] && pass "옛 배선 흉내 준비(2곳)" || fail "옛 배선 흉내 준비 실패"
+node "$SKILL_DIR/scripts/install.mjs" update --repo "$R47" >/dev/null 2>&1
+grep -q '2>/dev/null || true' "$R47/.claude/settings.json" && fail "update 뒤에도 오류 숨김 배선이 남음" || pass "update가 옛 배선을 교체"
+RC47="$(grep -c 'worklog.mjs\\" recent claude' "$R47/.claude/settings.json")"
+[ "$RC47" = "1" ] && pass "recent 배선 중복 없음" || fail "recent 배선 개수=${RC47}(1 기대)"
+grep -q 'user-hook-47' "$R47/.claude/settings.json" && pass "사용자 훅 보존" || fail "사용자 훅이 사라짐"
+rm -f "$R47/scenario47-docs/worklog.md"
+OUT47="$(cd "$R47" && node scripts/worklog.mjs recent claude 2>&1)"; RC47A=$?
+[ "$RC47A" = "0" ] && [ -z "$OUT47" ] && pass "worklog 없으면 조용히 통과" || fail "worklog 없음에서 rc=${RC47A}·출력=${OUT47}"
+echo '{broken' > "$R47/scenario47-docs/worklog-state.json"
+ERR47="$(cd "$R47" && node scripts/worklog.mjs catchup claude 2>&1 >/dev/null)"; RC47B=$?
+[ "$RC47B" != "0" ] && [ "$RC47B" != "2" ] && [ -n "$ERR47" ] && pass "상태 파일이 깨지면 오류를 알리되 막지 않음(rc=${RC47B})" || fail "깨진 상태에서 rc=${RC47B}·stderr 없음"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

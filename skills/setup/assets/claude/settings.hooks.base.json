@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "bash",
-            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" recent claude 2>/dev/null || true"],
+            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" recent claude"],
             "timeout": 10
           }
         ]
@@ -18,7 +18,7 @@
           {
             "type": "command",
             "command": "bash",
-            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" catchup claude 2>/dev/null || true"],
+            "args": ["-c", "node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" catchup claude"],
             "timeout": 10
           }
         ]
