@@ -732,7 +732,7 @@ grep "^updated:" "${NOTE_Z35}" | grep -q "${TODAY35}" && pass "updated가 오늘
 CHECK35="$(cd "$R35" && npm run --silent wiki:check 2>&1)"; CHECK35_RC=$?
 [ "${CHECK35_RC}" = "0" ] && pass "set 후 wiki:check 통과(스키마 유효)" || fail "set 후 wiki:check 실패: ${CHECK35}"
 
-echo "== 시나리오 37: worklog recent(비소비·요약1+턴8, SessionStart 배선) =="
+echo "== 시나리오 37: worklog recent(비소비·앞 구간 요약+턴8, SessionStart 배선) =="
 R37="$WORK/scenario37"
 new_repo "$R37"
 node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R37" --project-name "Scenario37" --slug scenario37 --mode new >/dev/null 2>&1
@@ -746,7 +746,7 @@ STATE37B="$(cat "$STATE37F")"
 echo "$OUT37A" | grep -q "최근 맥락" && pass "recent 출력 헤더" || fail "recent 헤더 없음"
 CNT37="$(echo "$OUT37A" | grep -c '^## \[#')"
 [ "$CNT37" = "8" ] && pass "recent 턴 8개 출력" || fail "recent 턴 개수=${CNT37}(8 기대)"
-echo "$OUT37A" | grep -q '^## \[요약' && pass "recent 요약 1개 포함" || fail "recent 요약 없음"
+echo "$OUT37A" | grep -q '^## \[요약' && pass "recent 앞 구간 요약 포함" || fail "recent 요약 없음"
 [ "$STATE37A" = "$STATE37B" ] && pass "recent 비소비(state 불변)" || fail "recent가 state 변경(비소비 위반)"
 [ "$OUT37A" = "$OUT37B" ] && pass "recent 반복 출력 동일" || fail "recent 반복 출력 다름"
 WIRE37="$(python3 -c "
@@ -1014,6 +1014,32 @@ echo "$OUT43_FORK" | grep -q '"permissionDecision":"deny"' && pass "orbit 저장
 [ -z "$OUT43_PLAIN_GP" ] && pass "orbit 없는 프로젝트 폴더: 간섭 안 함" || fail "orbit 없는 프로젝트 폴더에서 거부함"
 [ -z "$OUT43_MODE" ] && pass "orbit 모드는 허용" || fail "orbit 모드를 거부함"
 [ -z "$OUT43_OFF" ] && pass "ORBIT_AGENT_POLICY=off 탈출구" || fail "끄기가 동작하지 않음"
+
+echo ""
+echo "== 시나리오 44: recent — 앞 구간 요약·알림 묶음 제외·머리글 =="
+R44="$WORK/scenario44"
+new_repo "$R44"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R44" --project-name "Scenario44" --slug scenario44 --mode new >/dev/null 2>&1
+for i in $(seq 1 12); do
+  (cd "$R44" && node scripts/worklog.mjs append claude "q$i" "r$i" >/dev/null 2>&1)
+  if [ $((i % 3)) = 0 ]; then (cd "$R44" && node scripts/worklog.mjs summary claude "요약$i" >/dev/null 2>&1); fi
+done
+(cd "$R44" && node scripts/worklog.mjs append claude "(자동 알림 2건) a · b" "사용자 턴 사이에 도착한 백그라운드 작업 알림을 훅이 묶어 기록함 — completed: x" >/dev/null 2>&1)
+(cd "$R44" && node scripts/worklog.mjs append claude "q14" "r14" >/dev/null 2>&1)
+OUT44="$(cd "$R44" && node scripts/worklog.mjs recent claude)"
+OUT44C="$(cd "$R44" && node scripts/worklog.mjs recent claude --mode compact)"
+CNT44="$(echo "$OUT44" | grep -c '^## \[#')"
+[ "$CNT44" = "8" ] && pass "최근 턴 8개" || fail "최근 턴 개수=${CNT44}(8 기대)"
+echo "$OUT44" | grep -q '^## \[#6\]' && echo "$OUT44" | grep -q '^## \[#14\]' && pass "턴 창은 #6~#14(알림 제외)" || fail "턴 창이 기대와 다름"
+echo "$OUT44" | grep -q '^## \[#13\]' && fail "알림 묶음 항목이 들어감" || pass "알림 묶음 항목 제외"
+echo "$OUT44" | grep -q '^## \[요약 #1~3\]' && echo "$OUT44" | grep -q '^## \[요약 #4~6\]' && pass "앞 구간 요약(#1~3·#4~6) 포함" || fail "앞 구간 요약 누락"
+echo "$OUT44" | grep -q '^## \[요약 #7~9\]\|^## \[요약 #10~12\]' && fail "최근 8턴과 겹치는 요약이 들어감" || pass "겹치는 요약 제외"
+ORDER44="$(echo "$OUT44" | grep -n '^## \[요약' | head -1 | grep -c '요약 #1~3')"
+[ "$ORDER44" = "1" ] && pass "요약은 오래된 것부터" || fail "요약 순서 오류"
+echo "$OUT44" | head -1 | grep -q '이전 세션 최근 맥락' && pass "기본 머리글" || fail "기본 머리글 오류"
+echo "$OUT44C" | head -1 | grep -q '컴팩션 전 기록' && pass "compact 머리글" || fail "compact 머리글 오류"
+LEN44="$(printf '%s' "$OUT44" | wc -m | tr -d ' ')"
+[ "$LEN44" -le 10000 ] && pass "출력 1만 자 이하(${LEN44})" || fail "출력이 1만 자 초과(${LEN44})"
 
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."

@@ -13,6 +13,7 @@
 //   append ... --commit "<커밋메시지>"  기록 직후 git add -A + 커밋까지 한 번에 (순서 실수 방지)
 //   summary <작성자> "<요약>"           최근 턴들을 하나로 묶어 요약한다 (3턴마다)
 //   catchup <작성자>                    책갈피 이후 밀린 내용을 보여주고 책갈피를 옮긴다 (없으면 조용)
+//   recent <작성자> [--mode compact]     최근 턴 8개와 그 앞 구간 요약들을 보여준다 (읽기 전용)
 //
 // 안전 원칙: 책갈피는 "덜 옮기면 다시 읽기(무해)" 쪽으로만 실수하게. 앞질러 건너뛰지 않는다.
 // --commit: worklog를 별도 커밋으로 뒤에 미루지 말고, 작업 커밋에 함께 태우기 위한 것.
@@ -364,25 +365,52 @@ function catchup(agent) {
   });
 }
 
-// recent — 세션 시작 시 새 Claude 세션에 최근 맥락을 주입한다. catchup과 달리 책갈피를
-// 소비하지 않는(읽기 전용) 명령이라 병렬·연속 세션이 모두 동일하게 받는다. 출력은 가장 최근
-// 요약 1개 + 최근 턴 8개(고정). 시점별 기억만으로는 놓치기 쉬운 번복·폐기를 시간순 로그로 메운다.
-// 결정: D-worklog-recent-injection.
-function recent() {
+// recent — 세션 시작과 컴팩션 직후에 최근 맥락을 주입한다. catchup과 달리 책갈피를
+// 소비하지 않는(읽기 전용) 명령이라 병렬·연속 세션이 모두 동일하게 받는다. 시점별 기억만으로는
+// 놓치기 쉬운 번복·폐기를 시간순 로그로 메운다. 결정: D-프로젝트-기억-분담(결정 3·4).
+// 출력은 최근 턴 8개와, 그 8턴보다 앞 구간을 덮는 요약들이다. 요약은 3턴마다 직전 3턴만 덮어
+// 최신 요약이 늘 최근 8턴과 겹치므로, 8턴 안쪽만 덮는 요약은 넣지 않는다. 훅이 묶어 적은
+// 백그라운드 알림 항목은 모델이 쓴 기록과 겹치고 주입 칸만 차지해 뺀다.
+const RECENT_TURNS = 8;
+const RECENT_SUMMARY_MAX = 5;
+const RECENT_SUMMARY_CHARS = 3000;
+const RECENT_TOTAL_CHARS = 9000; // 훅 출력 상한(10,000자) 안에 머문다
+const NOTICE_BUNDLE_MARK = '사용자 턴 사이에 도착한 백그라운드 작업 알림을 훅이 묶어 기록함';
+
+function recent(mode) {
   if (!fs.existsSync(LOG)) return;
   const blocks = fs
     .readFileSync(LOG, 'utf8')
     .split(/\n(?=## \[)/)
-    .filter((b) => b.startsWith('## ['));
+    .filter((b) => b.startsWith('## ['))
+    .map((b) => b.trim());
   if (!blocks.length) return;
-  const summaries = blocks.filter((b) => /^## \[요약 /.test(b));
-  const turns = blocks.filter((b) => /^## \[#\d+\]/.test(b));
-  const out = [];
-  if (summaries.length) out.push(summaries[summaries.length - 1].trim());
-  for (const t of turns.slice(-8)) out.push(t.trim());
-  if (!out.length) return;
-  process.stdout.write('── 이전 세션 최근 맥락 (worklog 요약1+턴8) ──\n\n');
-  process.stdout.write(out.join('\n\n') + '\n');
+  const turns = [];
+  const summaries = [];
+  for (const block of blocks) {
+    const turn = block.match(/^## \[#(\d+)\]/);
+    const range = block.match(/^## \[요약 #(\d+)~(\d+)\]/);
+    if (turn && !block.includes(NOTICE_BUNDLE_MARK)) turns.push({ n: Number(turn[1]), text: block });
+    else if (range) summaries.push({ from: Number(range[1]), to: Number(range[2]), text: block });
+  }
+  const recentTurns = turns.slice(-RECENT_TURNS);
+  const windowStart = recentTurns.length ? recentTurns[0].n : Infinity;
+  const picked = [];
+  let summaryChars = 0;
+  for (const summary of summaries.filter((s) => s.from < windowStart).sort((a, b) => b.to - a.to)) {
+    if (picked.length >= RECENT_SUMMARY_MAX || summaryChars + summary.text.length > RECENT_SUMMARY_CHARS) break;
+    picked.push(summary);
+    summaryChars += summary.text.length;
+  }
+  picked.sort((a, b) => a.to - b.to);
+  let parts = [...picked.map((s) => s.text), ...recentTurns.map((t) => t.text)];
+  while (parts.join('\n\n').length > RECENT_TOTAL_CHARS && parts.length > 1) parts = parts.slice(1);
+  if (!parts.length) return;
+  const summaryCount = parts.length - Math.min(parts.length, recentTurns.length);
+  const turnCount = parts.length - summaryCount;
+  const title = mode === 'compact' ? '컴팩션 전 기록' : '이전 세션 최근 맥락';
+  process.stdout.write(`── ${title} (worklog 앞 구간 요약 ${summaryCount} + 최근 턴 ${turnCount}) ──\n\n`);
+  process.stdout.write(parts.join('\n\n') + '\n');
 }
 
 // --commit "<메시지>" 를 인자에서 분리 (append 직후 작업 커밋에 함께 태운다)
@@ -400,6 +428,7 @@ commitMsg = takeOption('--commit');
 const hookSessionId = takeOption('--session-id');
 const hookTurnToken = takeOption('--turn-token');
 const hookTurnId = takeOption('--turn-id');
+const recentMode = takeOption('--mode');
 
 // 기록을 커밋에 포함 → 순서 실수(커밋 먼저, 기록 나중)를 원천 차단
 function gitCommitAll(msg) {
@@ -425,8 +454,8 @@ if (cmd === 'append') {
   summary(agent, a ?? '');
   if (commitMsg !== null) gitCommitAll(commitMsg);
 } else if (cmd === 'catchup') catchup(agent);
-else if (cmd === 'recent') recent();
+else if (cmd === 'recent') recent(recentMode);
 else {
-  process.stderr.write('사용법: worklog <append|summary|catchup|recent> <claude|codex> ... [--commit "메시지"] [--session-id ID --turn-token TOKEN | --session-id ID --turn-id N]\n');
+  process.stderr.write('사용법: worklog <append|summary|catchup|recent> <claude|codex> ... [--commit "메시지"] [--session-id ID --turn-token TOKEN | --session-id ID --turn-id N] [--mode compact]\n');
   process.exit(1);
 }
