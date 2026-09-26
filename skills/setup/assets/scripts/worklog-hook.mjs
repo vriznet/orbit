@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const WORKLOG = path.join(ROOT, 'scripts', 'worklog.mjs');
+const WORKLOG_LOG = path.join(ROOT, '{{DOCS_DIR}}', 'worklog.md');
 const STALE_STATE_MS = 30 * 24 * 60 * 60 * 1000; // 30일 — 다른 세션의 오래된 상태 파일 기회적 청소
 const MAX_ORPHANS = 20; // P02 — 미기록 턴 대기열 상한. 넘치면 가장 오래된 것부터 버린다.
 const MAX_MERGED = 20; // 한 턴에 합쳐진 앞 턴 토큰 상한
@@ -263,6 +264,33 @@ function tagValue(body, tag) {
 // 입력이 백그라운드 완료 알림뿐이면 알림 목록을, 아니면 null(사용자 턴)을 돌려준다.
 // 판별은 좁게 한다: 알림 블록 밖에 글자가 하나라도 있거나, 블록에 task-id·status가 없으면
 // 사용자 턴으로 본다. 판별이 틀리는 쪽은 소음(사용자 턴으로 셈)이지 기록 누락이 아니다.
+// 알림 결과에 든 임시 폴더 경로는 파일 이름만 남긴다. 긴 경로가 글자 상한을 먹어 정작
+// 내용이 잘리고(설치본 worklog #5), 경로 자체는 곧 사라져 다시 쓸 수 없다.
+function shortenTempPaths(text) {
+  return String(text || '').replace(/(?:\/private)?\/(?:tmp|var\/folders)\/(?:[^\s`'"<>]*\/)?([^\s`'"<>/]+)/g, '…/$1');
+}
+
+// worklog에 실제로 기록된 마지막 턴 번호(없으면 0). 꼬리부터 읽고, 머리글이 없으면 넓혀 읽는다.
+function lastLoggedTurn() {
+  let size;
+  try { size = fs.statSync(WORKLOG_LOG).size; } catch { return 0; }
+  for (let bytes = 16384; ; bytes *= 4) {
+    const start = Math.max(0, size - bytes);
+    let text = '';
+    try {
+      const fd = fs.openSync(WORKLOG_LOG, 'r');
+      try {
+        const buffer = Buffer.alloc(size - start);
+        fs.readSync(fd, buffer, 0, size - start, start);
+        text = buffer.toString('utf8');
+      } finally { fs.closeSync(fd); }
+    } catch { return 0; }
+    let max = 0;
+    for (const match of text.matchAll(/^## \[#(\d+)\]/gm)) max = Math.max(max, Number(match[1]));
+    if (max || start === 0) return max;
+  }
+}
+
 function parseNotifications(prompt) {
   if (typeof prompt !== 'string' || !prompt.includes('<task-notification>')) return null;
   const bodies = [...prompt.matchAll(NOTICE_BLOCK)].map((match) => match[1]);
@@ -275,7 +303,7 @@ function parseNotifications(prompt) {
     notices.push({
       status: compact(status, 40),
       summary: compact(tagValue(body, 'summary'), 160),
-      result: compact(tagValue(body, 'result'), 200),
+      result: compact(shortenTempPaths(tagValue(body, 'result')), 200),
     });
   }
   return notices;
@@ -283,8 +311,14 @@ function parseNotifications(prompt) {
 
 // 쉬는 동안 온 알림들을 worklog 한 항목으로 기록한다. 실패하면 버퍼로 되돌린다.
 // 잠금을 쥔 채로 부르면 안 된다.
+// 알림이 버퍼에 들어온 뒤 worklog에 새 기록이 생겼으면, 알림을 받은 턴에서 모델이 이미
+// 적은 것이다(설치본 worklog #4·#5 이중 기록). 그런 알림은 묶음에서 뺀다.
+// 결정: D-프로젝트-기억-분담(결정 4).
 function appendNoticeBundle(input, notices) {
   if (!notices?.length) return;
+  const current = lastLoggedTurn();
+  notices = notices.filter((notice) => !(Number.isFinite(notice.logAt) && current > notice.logAt));
+  if (!notices.length) return;
   const count = notices.length;
   const summaries = notices.map((notice) => notice.summary || notice.status);
   const ask = count === 1
@@ -359,7 +393,8 @@ function beginNotification(input, state, notices, promptId) {
   }
   if (promptId && promptId === state.lastPromptId) return {};
   const at = new Date().toISOString();
-  let buffered = [...state.notices, ...notices.map((notice) => ({ ...notice, at }))];
+  const logAt = lastLoggedTurn();
+  let buffered = [...state.notices, ...notices.map((notice) => ({ ...notice, at, logAt }))];
   if (buffered.length > MAX_NOTICES) {
     process.stderr.write(`백그라운드 알림 버퍼가 가득 차(상한 ${MAX_NOTICES}) 오래된 알림 ${buffered.length - MAX_NOTICES}건을 버렸습니다.\n`);
     buffered = buffered.slice(-MAX_NOTICES);

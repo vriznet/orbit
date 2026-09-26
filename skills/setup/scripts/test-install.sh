@@ -1062,6 +1062,49 @@ echo "$OUT45" | grep -q '^- 판단: A를 고름' && [ "$(echo "$OUT45" | grep -c
 CU45="$(cd "$R45" && node scripts/worklog.mjs catchup codex)"
 echo "$CU45" | grep -q '^- 발견: 훅 출력은 1만 자 상한' && pass "catchup이 선택 칸을 넘김" || fail "catchup 파싱 오류"
 
+echo ""
+echo "== 시나리오 46: 모델이 이미 기록한 알림은 묶지 않기·임시 경로 줄이기 =="
+R46="$WORK/scenario46"
+new_repo "$R46"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R46" --project-name "Scenario46" --slug scenario46 --mode new >/dev/null 2>&1
+S46_OUT="$(cd "$R46" && node - <<'NODE'
+const { spawnSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const LOG = path.join(process.cwd(), 'scenario46-docs', 'worklog.md');
+const MARK = '훅이 묶어 기록함';
+let failed = false;
+const ok = (cond, label) => { console.log(`  ${cond ? '✅' : '❌'} ${label}`); if (!cond) failed = true; };
+const hook = (mode, input) => spawnSync(process.execPath, ['scripts/worklog-hook.mjs', mode], { input: JSON.stringify(input), encoding: 'utf8' });
+const tokenOf = (r) => (r.stdout.match(/--turn-token \\?"([0-9a-f]+)\\?"/) || [])[1];
+const append = (...args) => spawnSync(process.execPath, ['scripts/worklog.mjs', 'append', 'claude', ...args], { encoding: 'utf8' });
+const log = () => (fs.existsSync(LOG) ? fs.readFileSync(LOG, 'utf8') : '');
+const bundles = () => log().split(MARK).length - 1;
+const notice = (id, summary, result) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>${summary}</summary>\n<result>${result}</result>\n</task-notification>`;
+
+// (a) 알림 → 모델이 그 턴에 직접 기록 → 다음 사용자 턴: 묶음 없음
+hook('begin', { session_id: 's46', prompt: notice('a1', 'Agent A finished', '보고서 완료'), prompt_id: 'p1' });
+append('(자동 알림) A 결과 반영', '문서 고침');
+const u1 = hook('begin', { session_id: 's46', prompt: '다음 질문', prompt_id: 'p2' });
+ok(bundles() === 0, '(a) 모델이 이미 기록한 알림은 묶음을 만들지 않음');
+append('다음 질문', '답', '--session-id', 's46', '--turn-token', tokenOf(u1));
+
+// (b) 모델 기록 앞의 알림은 빼고, 그 뒤 알림만 묶음
+hook('begin', { session_id: 's46', prompt: notice('b1', 'Agent B1 finished', '앞 알림'), prompt_id: 'p3' });
+append('(자동 알림) B1 반영', '처리');
+hook('begin', { session_id: 's46', prompt: notice('b2', 'Agent B2 finished', '파일: `/private/tmp/claude-501/-Users-x/sess/scratchpad/voc-b2.md` 저장'), prompt_id: 'p4' });
+const u2 = hook('begin', { session_id: 's46', prompt: '또 질문', prompt_id: 'p5' });
+ok(bundles() === 1 && log().includes('Agent B2 finished'), '(b) 기록 뒤에 온 알림만 묶음 1개');
+const lastBundle = log().slice(log().lastIndexOf('## [#'));
+ok(!lastBundle.includes('B1 finished'), '(b) 이미 기록된 앞 알림은 묶음에서 빠짐');
+ok(lastBundle.includes('…/voc-b2.md') && !lastBundle.includes('/private/tmp'), '(b) 임시 경로는 파일 이름만');
+append('또 질문', '답', '--session-id', 's46', '--turn-token', tokenOf(u2));
+process.exit(failed ? 1 : 0);
+NODE
+)"; S46_RC=$?
+echo "${S46_OUT}"
+[ "${S46_RC}" = "0" ] || fail "시나리오 46 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0
