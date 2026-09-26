@@ -214,6 +214,25 @@ function toolActivity(use, at) {
 
 const digest = (text) => crypto.createHash('sha256').update(String(text)).digest('hex').slice(0, 16);
 
+// Stop 훅이 막은 멈춤(worklog 기록 강제·발견 칸 알림) 뒤 이어진 응답은 같은 사용자 턴이다.
+// 새 줄을 만들지 않고 그 세션의 마지막 기록을 고쳐 쓴다. 드문 경우라 파일 전체를 새로 쓴다(임시 파일 → 이름 바꾸기).
+function mergeIntoLast(file, session, seq, update) {
+  if (!fs.existsSync(file)) return false;
+  const lines = fs.readFileSync(file, 'utf8').split('\n');
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (!lines[index].trim()) continue;
+    let record;
+    try { record = JSON.parse(lines[index]); } catch { continue; }
+    if (record.session !== session || record.seq !== seq) continue;
+    lines[index] = JSON.stringify(update(record));
+    const temp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(temp, lines.join('\n'), { mode: 0o600 });
+    fs.renameSync(temp, file);
+    return true;
+  }
+  return false;
+}
+
 function stop(input) {
   const shared = sharedMemoryDir(ROOT);
   if (!shared || !input.transcript_path) return;
@@ -239,11 +258,15 @@ function stop(input) {
     const tools = [];
     const promptIds = new Set();
     let skippedLast = false;
+    let notices = 0;
+    let stopFeedback = false;
     for (const entry of entries) {
       if (entry?.promptId) promptIds.add(entry.promptId);
+      if (entry?.type === 'user' && entry.isMeta && /^Stop hook feedback:/.test(textOf(entry).trim())) stopFeedback = true;
       if (isHumanPrompt(entry)) {
         const text = textOf(entry).trim();
-        if (!isNotification(text)) user.push(text);
+        if (isNotification(text)) notices += 1;
+        else user.push(text);
       } else if (entry?.type === 'assistant') {
         for (const use of toolUses(entry)) tools.push(toolActivity(use, entry.timestamp));
         const text = textOf(entry).trim();
@@ -259,9 +282,26 @@ function stop(input) {
     if (last && !assistant.includes(last) && digest(last) !== cursor?.lastFinal) { assistant.push(last); pendingLast = digest(last); }
     const lastFinal = last && (assistant.includes(last)) ? digest(last) : cursor?.lastFinal || null;
 
-    const seq = (cursor?.seq || 0) + (user.length || assistant.length || tools.length ? 1 : 0);
+    const session = String(input.session_id || '');
     const entry = worklogEntry(input.session_id);
-    if (user.length || assistant.length) {
+    const newEntry = entry !== null && entry !== cursor?.lastEntry ? entry : null;
+    const files = changedSince(ROOT, readJson(snapshotPath(input.session_id)));
+    // 막힌 Stop 뒤 이어진 Stop(stop_hook_active)이고 새 사람 입력이 없으면 직전 기록에 합친다.
+    const continuing = (Boolean(input.stop_hook_active) || stopFeedback) && !user.length && cursor?.seq > 0;
+    let merged = false;
+    if (continuing && (assistant.length || newEntry !== null)) {
+      merged = mergeIntoLast(path.join(shared, 'dialogue.jsonl'), session, cursor.seq, (old) => ({
+        ...old,
+        at: new Date().toISOString(),
+        promptIds: [...new Set([...(old.promptIds || []), ...promptIds])],
+        assistant: redactPrefix([old.assistant, ...assistant].filter(Boolean).join('\n\n'), TEXT_LIMIT),
+        files: [...new Set([...(old.files || []), ...files])],
+        worklog: old.worklog ?? newEntry,
+      }));
+    }
+    const seq = continuing && (merged || !assistant.length) ? cursor.seq
+      : (cursor?.seq || 0) + (user.length || assistant.length || tools.length ? 1 : 0);
+    if (!merged && (user.length || assistant.length)) {
       const record = {
         v: 1,
         at: new Date().toISOString(),
@@ -270,16 +310,17 @@ function stop(input) {
         seq,
         promptIds: [...promptIds],
         continued: user.length === 0,
-        user: redactPrefix(user.join('\n\n'), TEXT_LIMIT),
+        // 사람 입력 없이 시작한 턴(백그라운드 알림 등)은 빈칸 대신 표시를 남긴다.
+        user: user.length ? redactPrefix(user.join('\n\n'), TEXT_LIMIT) : notices ? '(자동 알림)' : '(사용자 입력 없음)',
         assistant: redactPrefix(assistant.join('\n\n'), TEXT_LIMIT),
-        files: changedSince(ROOT, readJson(snapshotPath(input.session_id))),
+        files,
         filesEstimated: true,
-        worklog: entry !== null && entry !== cursor?.lastEntry ? entry : null,
+        worklog: newEntry,
       };
       appendPrivate(path.join(shared, 'dialogue.jsonl'), [record]);
     }
     if (tools.length) {
-      const base = { v: 1, session: String(input.session_id || ''), worktree: ROOT.replace(/\/$/, ''), seq, worklog: entry !== null && entry !== cursor?.lastEntry ? entry : null };
+      const base = { v: 1, session, worktree: ROOT.replace(/\/$/, ''), seq, worklog: newEntry };
       appendPrivate(path.join(shared, 'tools.jsonl'), tools.map((tool) => ({ ...base, ...tool })));
     }
     cursors[key] = {
@@ -338,6 +379,7 @@ function fileMemory(rel) {
     if (record.file !== rel) continue;
     const key = toolsId(record);
     const turn = turns.get(key) || { record, tools: new Set(), at: record.at };
+    if (!turn.record.worklog && record.worklog) turn.record = { ...turn.record, worklog: record.worklog }; // 이어진 Stop에서 붙은 번호
     turn.tools.add(record.tool);
     if (String(record.at) > String(turn.at)) turn.at = record.at;
     turns.set(key, turn);

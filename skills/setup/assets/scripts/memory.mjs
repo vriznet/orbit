@@ -195,7 +195,7 @@ function formatItem(item, total) {
     return `- ${mark} #${item.ref.replace(/^(요약 )?#/, '')} · ${date} · ${oneLine(ask, 150)}`;
   }
   if (item.source === 'tools') {
-    const first = item.records[0];
+    const first = { ...item.records[0], worklog: item.records.find((r) => r.worklog)?.worklog ?? null };
     const hit = (item.hits[0] || first);
     return `- ${mark} ${toolsId(first)} · ${when(first.at)} · 도구 ${item.records.length}회${first.worklog ? ` · worklog #${first.worklog}` : ''} · ${oneLine(toolLine(hit), 140)}`;
   }
@@ -253,7 +253,8 @@ function showItem(id, { around = false } = {}) {
     if (kind === 't') {
       const turn = records.filter((r) => same(r) && String(r.seq) === seq);
       if (!turn.length) return `${id}: 도구 색인에 그 턴이 없습니다.`;
-      return [`### 도구 활동 ${id} · ${when(turn[0].at)}${turn[0].worklog ? ` · worklog #${turn[0].worklog}` : ''} · ${turn.length}회`, ...turn.map((r) => `- ${toolLine(r)}`)].join('\n');
+      const worklog = turn.find((r) => r.worklog)?.worklog;
+      return [`### 도구 활동 ${id} · ${when(turn[0].at)}${worklog ? ` · worklog #${worklog}` : ''} · ${turn.length}회`, ...turn.map((r) => `- ${toolLine(r)}`)].join('\n');
     }
     const session = records.filter(same);
     const index = session.findIndex((r) => String(r.seq) === seq);

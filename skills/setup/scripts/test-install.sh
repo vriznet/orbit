@@ -1834,6 +1834,70 @@ S63_OUT="$(cd "$R63" && TZ=Asia/Seoul node "$WORK/scenario63.cjs")"; S63_RC=$?
 echo "${S63_OUT}"
 [ "${S63_RC}" = "0" ] || fail "시나리오 63 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 64: 막힌 Stop 뒤 이어진 응답은 대화 사본 한 기록으로(0.2.2) =="
+R64="$WORK/scenario64"
+new_repo "$R64"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R64" --project-name "Scenario64" --slug scenario64 --mode new >/dev/null 2>&1
+# bash 3.2는 $( ) 안 heredoc의 # 을 주석으로 읽으므로 스크립트를 파일로 먼저 쓴다.
+cat > "$WORK/scenario64.cjs" <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd();
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const hook = (mode, input) => spawnSync(process.execPath, ['scripts/memory-hook.mjs', mode], { input: JSON.stringify(input), encoding: 'utf8' });
+const u = (text, promptId, extra = {}) => ({ type: 'user', promptId, message: { role: 'user', content: text }, ...extra });
+const a = (text, tool) => ({ type: 'assistant', message: { role: 'assistant', content: [...(text ? [{ type: 'text', text }] : []), ...(tool ? [{ type: 'tool_use', id: `t${Math.random()}`, name: tool.name, input: tool.input }] : [])] } });
+const T = path.join(ROOT, '..', 't64.jsonl');
+const write = (lines) => fs.appendFileSync(T, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+const MEM = path.join(ROOT, '.git', 'orbit-memory');
+const read = (name) => (fs.existsSync(path.join(MEM, name)) ? fs.readFileSync(path.join(MEM, name), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : []);
+const WL = path.join(ROOT, '.git', 'orbit-state', 'worklog'); fs.mkdirSync(WL, { recursive: true });
+const setEntry = (entry) => fs.writeFileSync(path.join(WL, 's64.json'), JSON.stringify({ sessionId: 's64', counter: 1, pending: null, orphans: [], notices: [], entry }));
+const feedback = (promptId) => u('Stop hook feedback:\n이번 사용자 턴의 worklog가 기록되지 않았습니다.', promptId, { isMeta: true });
+
+// 1) worklog 기록 강제로 막힌 턴: 첫 멈춤 → 막힘 → 기록 → 최종 답
+write([u('재시작 했어', 'p1'), a('중간 멈춤 답', { name: 'Read', input: { file_path: path.join(ROOT, 'src/a.js') } })]);
+hook('turn-start', { session_id: 's64', prompt: '재시작 했어' });
+hook('stop', { session_id: 's64', transcript_path: T, last_assistant_message: '중간 멈춤 답', stop_hook_active: false });
+write([feedback('p1'), a('', { name: 'Bash', input: { command: 'node scripts/worklog.mjs append claude "q" "r"' } }), a('최종 답')]);
+setEntry(86);
+hook('stop', { session_id: 's64', transcript_path: T, last_assistant_message: '최종 답', stop_hook_active: true });
+let d = read('dialogue.jsonl');
+ok(d.length === 1, `막힌 턴이 한 기록(${d.length})`);
+ok(d[0]?.user === '재시작 했어' && d[0]?.assistant.includes('중간 멈춤 답') && d[0]?.assistant.includes('최종 답'), '사용자 말과 중간·최종 답이 한 기록에');
+ok(d[0]?.worklog === 86 && d[0]?.seq === 1, `worklog 번호가 그 기록에(${d[0]?.worklog})`);
+ok((d[0]?.assistant.match(/최종 답/g) || []).length === 1 && (d[0]?.assistant.match(/중간 멈춤 답/g) || []).length === 1, '같은 답을 두 번 담지 않음');
+let t = read('tools.jsonl');
+ok(t.length === 2 && t.every((r) => r.seq === 1), `도구 색인도 같은 턴(seq ${t.map((r) => r.seq).join(',')})`);
+const showT = spawnSync(process.execPath, ['scripts/memory.mjs', 'show', 't:s64:1'], { encoding: 'utf8' }).stdout;
+ok(showT.includes('worklog #86'), 'show 도구 활동에 이어진 Stop에서 붙은 worklog 번호');
+ok((fs.statSync(path.join(MEM, 'dialogue.jsonl')).mode & 0o777) === 0o600, '고쳐 쓴 뒤에도 권한 600');
+
+// 2) 발견 칸 알림으로 막힌 턴(stop_hook_active 없이 Stop 피드백 줄만으로도 알아챔)
+write([u('다음 요청', 'p2'), a('작업 끝 답')]);
+hook('turn-start', { session_id: 's64', prompt: '다음 요청' });
+setEntry(87);
+hook('stop', { session_id: 's64', transcript_path: T, last_assistant_message: '작업 끝 답' });
+write([feedback('p2'), a('', { name: 'Bash', input: { command: 'node scripts/worklog.mjs found claude 87 "발견"' } }), a('발견 채움')]);
+hook('stop', { session_id: 's64', transcript_path: T, last_assistant_message: '발견 채움' });
+d = read('dialogue.jsonl');
+ok(d.length === 2 && d[1].user === '다음 요청' && d[1].assistant.includes('발견 채움') && d[1].worklog === 87, `발견 알림 턴도 한 기록(${d.length})`);
+t = read('tools.jsonl');
+ok(t.filter((r) => r.seq === 2).length === 1 && t.every((r) => r.seq <= 2), '발견 보충 도구도 같은 턴');
+
+// 3) 사람 입력 없이 알림으로 시작한 턴은 따로, 사용자 칸은 표시
+write([u('<task-notification>작업 끝</task-notification>', 'p3'), a('알림 처리 답')]);
+hook('stop', { session_id: 's64', transcript_path: T, last_assistant_message: '알림 처리 답', stop_hook_active: false });
+d = read('dialogue.jsonl');
+ok(d.length === 3 && d[2].seq === 3 && d[2].user === '(자동 알림)' && d[2].assistant === '알림 처리 답', `알림 턴은 새 기록·'(자동 알림)'(${d[2]?.user})`);
+const search = spawnSync(process.execPath, ['scripts/memory.mjs', 'search', '재시작'], { encoding: 'utf8' }).stdout;
+ok(search.includes('d:s64:1') && search.includes('worklog #86'), '사용자 말로 찾으면 최종 답과 worklog 번호가 있는 기록이 걸림');
+process.exit(failed ? 1 : 0);
+NODE
+S64_OUT="$(cd "$R64" && node "$WORK/scenario64.cjs")"; S64_RC=$?
+echo "${S64_OUT}"
+[ "${S64_RC}" = "0" ] || fail "시나리오 64 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0
