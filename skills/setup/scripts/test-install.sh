@@ -728,6 +728,7 @@ SET35_CODE=$?
 [ "${SET35_CODE}" = "0" ] && pass "wiki set 실행 성공" || fail "wiki set 실행 실패(got ${SET35_CODE})"
 grep -q '^status: active' "${NOTE_Z35}" && pass "status 변경됨" || fail "status가 변경되지 않음"
 grep -q '^summary: "바뀐 요약"' "${NOTE_Z35}" && pass "summary 변경됨" || fail "summary가 변경되지 않음"
+grep -q "바뀐 요약" "$R35/scenario35-docs/wiki/_index.md" && ! grep -q "초기 요약" "$R35/scenario35-docs/wiki/_index.md" && pass "set 후 _index 자동 블록이 새 요약으로 갱신됨(0.2.5)" || fail "set 후 _index가 옛 요약에 머묾"
 CREATED35_AFTER="$(grep '^created:' "${NOTE_Z35}")"
 [ "${CREATED35_BEFORE}" = "${CREATED35_AFTER}" ] && pass "created는 변경되지 않음" || fail "created가 잘못 변경됨"
 TODAY35="$(date +%Y-%m-%d)"

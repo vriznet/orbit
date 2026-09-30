@@ -341,6 +341,10 @@ function cmdSet(rest) {
 
   const newContent = `${serializeFrontmatter(nextData)}\n${bodyAfterFrontmatter(note)}`;
   atomicWriteFile(note.file, newContent);
+  // set은 인덱스를 다시 쓰지 않아 summary·title을 고쳐도 _index의 자동 블록이 옛 값으로
+  // 남았다(재현: new 직후 --summary 로 고치면 인덱스에 제목이 그대로 남음). new·rename·rm과
+  // 같게 맞춘다.
+  regenerateIndex(loadAllNotes());
   console.log(`수정됨 ${relativeFile(note.file)}`);
 }
 

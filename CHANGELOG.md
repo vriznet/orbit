@@ -1,5 +1,11 @@
 # 변경 내역
 
+## 0.2.5 — 2026-09-30
+
+- `wiki set`이 노트의 summary·title을 고쳐도 `_index.md` 자동 블록을 다시 만들지 않아 옛 값이 남던 문제를 고쳤다(new·rename·rm과 같게 인덱스를 다시 쓴다).
+- `worktree-merge` 스킬에 **원장 정합 검사** 단계를 더했다: 병합으로 들어온 새 ADR과 열린 할일을 대조해, 무효·보류·완료 후보가 있으면 할일마다 선택 UI로 사용자에게 묻고 답대로만 처리한다. 묻지 않고 완료·취소하지 않는다.
+- 회귀 시나리오 35에 인덱스 갱신 확인을 더했다.
+
 ## 0.2.4 — 2026-09-26
 
 - 스킬 `recall`·`forget`·`decision-context`·`worktree-merge`를 저장소 사본에서 **플러그인 스킬**로 옮겼다. 이제 `/orbit:recall`, `/orbit:forget`, `/orbit:decision-context`, `/orbit:worktree-merge`로 부른다. 스킬은 저장소의 `.claude/orbit-manifest.json`(`docsDir`)과 `scripts/`를 쓰고, orbit이 없는 저장소에서는 멈춘다.
