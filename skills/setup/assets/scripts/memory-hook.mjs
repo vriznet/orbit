@@ -52,6 +52,17 @@ function pendingTurnStart(entries, sessionId) {
   return index === -1 ? Infinity : index;
 }
 
+// 상태 파일 조각의 출처 표시. 컴팩션이 어떤 메시지를 원문 그대로 남길지는 PreCompact 때 모르고
+// 경계(compact_boundary)가 기록된 뒤에야 안다. 그래서 여기서는 조각마다 출처 uuid를 HTML 주석으로
+// 감싸 두고, compact-restore가 남은 메시지에서 나온 조각을 떼어 낸다(stripPreserved). 주입 글에는
+// 표시가 남지 않는다.
+const SOURCE_OPEN = '<!-- orbit:src';
+const SOURCE_CLOSE = '<!-- orbit:src-end -->';
+
+function sourced(kind, uuid, lines) {
+  return uuid ? [`${SOURCE_OPEN} ${kind} ${uuid} -->`, ...lines, SOURCE_CLOSE] : lines;
+}
+
 function buildState(input) {
   const entries = readTranscript(input.transcript_path);
   const marks = lastMarks(entries);
@@ -64,7 +75,8 @@ function buildState(input) {
     if (!isHumanPrompt(entry)) continue;
     const text = textOf(entry).trim();
     if (isNotification(text)) notices += 1;
-    else prompts.push(clip(text, PROMPT_LIMIT));
+    // 컴팩션을 부른 /compact 자체는 머리의 '계기'·'초점 문구'와 같은 정보라 넣지 않는다.
+    else if (!/^\/compact(\s|$)/.test(text)) prompts.push({ uuid: entry.uuid, text: clip(text, PROMPT_LIMIT) });
   }
   const edited = [];
   for (const entry of segment) {
@@ -73,10 +85,15 @@ function buildState(input) {
       if (file && !edited.includes(file)) edited.push(file);
     }
   }
-  const status = gitStatusEntries(ROOT).map((entry) => entry.path);
+  // 도구로 고친 파일 절에 이미 있는 경로는 되풀이하지 않는다.
+  const status = gitStatusEntries(ROOT).map((entry) => entry.path).filter((file) => !edited.includes(file));
   let lastAnswer = '';
+  let lastAnswerUuid = '';
   for (let index = segment.length - 1; index >= 0 && !lastAnswer; index -= 1) {
-    if (segment[index]?.type === 'assistant') lastAnswer = textOf(segment[index]).trim();
+    if (segment[index]?.type === 'assistant') {
+      lastAnswer = textOf(segment[index]).trim();
+      lastAnswerUuid = segment[index].uuid || '';
+    }
   }
   const todos = lastTodos(entries);
   const running = runningBackgroundTasks(entries);
@@ -89,12 +106,12 @@ function buildState(input) {
   lines.push('', `## 마지막 worklog 기록 뒤 사용자 입력 (원문, 오래된 순${notices ? ` · 백그라운드 알림 ${notices}건 제외` : ''})`);
   const shown = prompts.slice(-MAX_PROMPTS);
   if (prompts.length > shown.length) lines.push(`- (앞의 ${prompts.length - shown.length}개 생략)`);
-  shown.forEach((text, index) => lines.push(`${index + 1}. ${text.replace(/\n/g, '\n   ')}`));
+  shown.forEach((prompt, index) => lines.push(...sourced('prompt', prompt.uuid, [`${index + 1}. ${prompt.text.replace(/\n/g, '\n   ')}`])));
   if (!shown.length) lines.push('- 없음');
   lines.push('', '## 이 구간에서 도구로 고친 파일');
   lines.push(...(edited.length ? edited.slice(0, MAX_FILES).map((file) => `- ${file}`) : ['- 없음']));
   if (status.length) {
-    lines.push('', '## 작업 트리에서 아직 커밋되지 않은 변경 (git status — 이 구간 밖의 변경이 섞일 수 있음)');
+    lines.push('', '## 작업 트리에서 아직 커밋되지 않은 변경 (git status — 위 목록에 없는 것만, 이 구간 밖의 변경이 섞일 수 있음)');
     lines.push(...status.slice(0, MAX_FILES).map((file) => `- ${file}`));
   }
   if (todos?.length) {
@@ -105,7 +122,7 @@ function buildState(input) {
     lines.push('', '## 완료 알림을 아직 못 받은 백그라운드 작업');
     lines.push(...running.map((id) => `- ${id}`));
   }
-  if (lastAnswer) lines.push('', '## 컴팩션 직전 마지막 답변 (앞부분)', clip(lastAnswer, 1200));
+  if (lastAnswer) lines.push('', ...sourced('answer', lastAnswerUuid, ['## 컴팩션 직전 마지막 답변 (앞부분)', clip(lastAnswer, 1200)]));
 
   let text = `${lines.join('\n')}\n`;
   if (text.length > STATE_LIMIT) text = `${text.slice(0, STATE_LIMIT - 40)}\n…(상한 ${STATE_LIMIT}자에서 자름)\n`;
@@ -137,6 +154,54 @@ function fitRecent(text, limit) {
   return blocks.length ? `${head}\n\n${blocks.join('\n\n')}` : '';
 }
 
+// 세션 기록의 마지막 컴팩션 경계가 원문 그대로 남긴 메시지 uuid. 경계에 목록이 없으면(예전 판·
+// 목록 없이 요약만 한 컴팩션) null — 그때는 상태 파일을 지금처럼 다 넣는다. 남긴 메시지는 경계 뒤에
+// 다시 기록되지 않고 uuid로만 가리킨다. 경계 줄 하나만 읽으면 되니 끝에서부터 찾는다.
+export function preservedUuids(transcriptPath) {
+  let text;
+  try { text = fs.readFileSync(transcriptPath, 'utf8'); } catch { return null; }
+  let at = text.length;
+  while ((at = text.lastIndexOf('"compact_boundary"', at - 1)) !== -1) {
+    const start = text.lastIndexOf('\n', at) + 1;
+    const end = text.indexOf('\n', at);
+    let entry;
+    try { entry = JSON.parse(text.slice(start, end === -1 ? undefined : end)); } catch { continue; }
+    if (entry?.type !== 'system' || entry.subtype !== 'compact_boundary') continue;
+    const uuids = entry.compactMetadata?.preservedMessages?.uuids;
+    return Array.isArray(uuids) && uuids.length ? new Set(uuids) : null;
+  }
+  return null;
+}
+
+// 남은 메시지에서 나온 조각을 빼고 출처 표시를 지운다. 사용자 입력 번호는 다시 매기고, 뺀 수를 한 줄로 알린다.
+export function stripPreserved(state, preserved) {
+  const removed = { prompt: 0, answer: 0 };
+  const block = /<!-- orbit:src (\w+) (\S+) -->\n([\s\S]*?)(?:\n<!-- orbit:src-end -->|(?=\n?$))\n?/g;
+  let text = state.replace(block, (match, kind, uuid, body) => {
+    if (preserved?.has(uuid)) {
+      removed[kind] = (removed[kind] || 0) + 1;
+      return '';
+    }
+    return `${body}\n`;
+  });
+  text = text.replace(/<!-- orbit:src[^\n]*-->\n?/g, ''); // 잘린 표시 찌꺼기
+  const heading = /^## 마지막 worklog 기록 뒤 사용자 입력[^\n]*$/m;
+  const found = text.match(heading);
+  if (found) {
+    const start = found.index + found[0].length;
+    const next = text.indexOf('\n## ', start);
+    const end = next === -1 ? text.length : next;
+    let number = 0;
+    let body = text.slice(start, end).replace(/^\d+\. /gm, () => `${(number += 1)}. `);
+    if (removed.prompt) {
+      const note = `- (${removed.prompt}개는 컴팩션 뒤 남은 대화에 원문 그대로 있어 뺌)`;
+      body = number ? `\n${note}${body}` : `\n${note}\n`;
+    } else if (!number && !/\n- /.test(body)) body = '\n- 없음\n';
+    text = `${text.slice(0, start)}${body}${text.slice(end)}`;
+  }
+  return text;
+}
+
 function compactRestore(input) {
   // 컴팩션으로 앞선 주입이 요약되어 사라졌으니, 파일별 기억 기록부를 비워 다시 넣게 한다.
   const registry = injectedRegistryPath(input.session_id);
@@ -144,7 +209,7 @@ function compactRestore(input) {
   const parts = [];
   const file = compactStatePath(input.session_id);
   if (file && fs.existsSync(file) && Date.now() - fs.statSync(file).mtimeMs < STATE_FRESH_MS) {
-    let state = fs.readFileSync(file, 'utf8').trim();
+    let state = stripPreserved(fs.readFileSync(file, 'utf8'), preservedUuids(input.transcript_path)).trim();
     if (state.length > RESTORE_STATE_LIMIT) state = `${state.slice(0, RESTORE_STATE_LIMIT - 30)}\n…(상태 파일 일부 생략: ${path.relative(ROOT, file)})`;
     parts.push(state);
   }

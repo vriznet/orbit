@@ -749,8 +749,10 @@ OUT37B="$(cd "$R37" && node scripts/worklog.mjs recent claude)"
 STATE37B="$(cat "$STATE37F")"
 echo "$OUT37A" | grep -q "최근 맥락" && pass "recent 출력 헤더" || fail "recent 헤더 없음"
 CNT37="$(echo "$OUT37A" | grep -c '^## \[#')"
-[ "$CNT37" = "8" ] && pass "recent 턴 8개 출력" || fail "recent 턴 개수=${CNT37}(8 기대)"
-echo "$OUT37A" | grep -q '^## \[요약' && pass "recent 앞 구간 요약 포함" || fail "recent 요약 없음"
+# 요약(#1~10)이 8턴 창(#3~#10)과 겹쳐 빠지고, 그 요약이 대신하던 #1·#2는 사이 턴 원문으로 들어간다(0.2.6).
+[ "$CNT37" = "10" ] && pass "recent 턴 8개 + 사이 턴 2개 출력" || fail "recent 턴 개수=${CNT37}(10 기대)"
+echo "$OUT37A" | grep -q '^## \[요약' && fail "창과 겹치는 요약이 들어감" || pass "창과 겹치는 요약은 넣지 않음"
+echo "$OUT37A" | grep -q '사이 턴 2' && echo "$OUT37A" | grep -q '^## \[#1\]' && pass "겹친 요약이 대신하던 앞 턴은 원문으로(사이 턴 2)" || fail "앞 턴이 조용히 빠짐"
 [ "$STATE37A" = "$STATE37B" ] && pass "recent 비소비(state 불변)" || fail "recent가 state 변경(비소비 위반)"
 [ "$OUT37A" = "$OUT37B" ] && pass "recent 반복 출력 동일" || fail "recent 반복 출력 다름"
 WIRE37="$(python3 -c "
@@ -1034,10 +1036,10 @@ done
 OUT44="$(cd "$R44" && node scripts/worklog.mjs recent claude)"
 OUT44C="$(cd "$R44" && node scripts/worklog.mjs recent claude --mode compact)"
 CNT44="$(echo "$OUT44" | grep -c '^## \[#')"
-[ "$CNT44" = "8" ] && pass "최근 턴 8개" || fail "최근 턴 개수=${CNT44}(8 기대)"
+[ "$CNT44" = "10" ] && pass "최근 턴 8개 + 사이 턴 2개(#4·#5)" || fail "최근 턴 개수=${CNT44}(10 기대)"
 echo "$OUT44" | grep -q '^## \[#6\]' && echo "$OUT44" | grep -q '^## \[#14\]' && pass "턴 창은 #6~#14(알림 제외)" || fail "턴 창이 기대와 다름"
 echo "$OUT44" | grep -q '^## \[#13\]' && fail "알림 묶음 항목이 들어감" || pass "알림 묶음 항목 제외"
-echo "$OUT44" | grep -q '^## \[요약 #1~3\]' && echo "$OUT44" | grep -q '^## \[요약 #4~6\]' && pass "앞 구간 요약(#1~3·#4~6) 포함" || fail "앞 구간 요약 누락"
+echo "$OUT44" | grep -q '^## \[요약 #1~3\]' && ! echo "$OUT44" | grep -q '^## \[요약 #4~6\]' && pass "앞 구간 요약 #1~3만 포함(창과 겹치는 #4~6 제외, 0.2.6)" || fail "앞 구간 요약이 기대와 다름"
 echo "$OUT44" | grep -q '^## \[요약 #7~9\]\|^## \[요약 #10~12\]' && fail "최근 8턴과 겹치는 요약이 들어감" || pass "겹치는 요약 제외"
 ORDER44="$(echo "$OUT44" | grep -n '^## \[요약' | head -1 | grep -c '요약 #1~3')"
 [ "$ORDER44" = "1" ] && pass "요약은 오래된 것부터" || fail "요약 순서 오류"
@@ -2033,6 +2035,66 @@ NODE
 S66_OUT="$(cd "$R66" && PLUGIN_ROOT="$(cd "$SKILL_DIR/../.." && pwd)" node "$WORK/scenario66.cjs")"; S66_RC=$?
 echo "${S66_OUT}"
 [ "${S66_RC}" = "0" ] || fail "시나리오 66 하위 항목 실패(위 ❌ 확인)"
+
+echo "== 시나리오 67: 컴팩션 복원 중복 줄이기 — 남긴 메시지 조각 빼기·겹치는 요약 빼기(0.2.6) =="
+R67="$WORK/scenario67"
+new_repo "$R67"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R67" --project-name "Scenario67" --slug scenario67 --mode new >/dev/null 2>&1
+R67B="$WORK/scenario67b"
+new_repo "$R67B"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R67B" --project-name "Scenario67B" --slug scenario67b --mode new >/dev/null 2>&1
+cat > "$WORK/scenario67.cjs" <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd();
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const wl = (cwd, ...args) => spawnSync(process.execPath, ['scripts/worklog.mjs', ...args], { cwd, encoding: 'utf8' });
+// 1) recent: 8턴 창과 겹치는 요약은 빼고, 빈 턴은 원문으로(상한 안)
+for (let i = 1; i <= 12; i += 1) { wl(ROOT, 'append', 'claude', `물음${i}`, `결과${i}`); if (i % 3 === 0) wl(ROOT, 'summary', 'claude', `요약${i}`); }
+for (const mode of [['--mode', 'compact'], []]) {
+  const out = wl(ROOT, 'recent', 'claude', ...mode).stdout;
+  const tag = mode.length ? 'compact' : 'startup';
+  ok(out.includes('[요약 #1~3]') && !out.includes('[요약 #4~6]'), `${tag}: 창(#5~#12)과 겹치는 요약 #4~6은 빠지고 #1~3은 남음`);
+  ok(/^## \[#4\]/m.test(out) && out.includes('사이 턴 1'), `${tag}: 요약도 창도 덮지 않는 #4는 원문으로(머리글에 사이 턴 1)`);
+  ok((out.match(/^## \[#\d+\]/gm) || []).length === 9, `${tag}: 턴 원문은 사이 턴 1 + 최근 8`);
+}
+// 2) 상한을 넘으면 빈 턴은 한 줄 안내로
+const B = process.env.R67B;
+for (let i = 1; i <= 12; i += 1) { wl(B, 'append', 'claude', `물음${i}`, '가'.repeat(i === 4 ? 3000 : 1000)); if (i % 3 === 0) wl(B, 'summary', 'claude', `요약${i}`); }
+const outB = wl(B, 'recent', 'claude', '--mode', 'compact').stdout;
+ok(outB.includes('## [#4 생략]') && outB.includes('memory.mjs show #4') && !/^## \[#4\] /m.test(outB), '상한을 넘으면 빈 턴은 번호·찾는 명령 한 줄로');
+ok(outB.length <= 10000, `recent 출력 상한 안(${outB.length})`);
+// 3) 상태 파일: 남긴 메시지에서 나온 조각을 복원 때 뺀다
+const run = (mode, input, env = {}) => spawnSync(process.execPath, ['scripts/memory-hook.mjs', mode], { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, ...env } });
+const msg = (type, uuid, text) => JSON.stringify({ type, uuid, message: { role: type, content: type === 'user' ? text : [{ type: 'text', text }] } });
+const lines = [msg('user', 'u1', '요청 A 67'), msg('assistant', 'x1', '중간 답'), msg('user', 'u2', '요청 B 67'), msg('assistant', 'a1', '마지막 답변 67'), msg('user', 'u3', '/compact')];
+const T = path.join(ROOT, '..', 't67.jsonl');
+fs.writeFileSync(T, lines.join('\n') + '\n');
+run('precompact', { session_id: 's67', transcript_path: T, trigger: 'manual' });
+const stateFile = path.join(ROOT, '.git', 'orbit-state', 'compact', 's67.md');
+const raw = fs.readFileSync(stateFile, 'utf8');
+ok(raw.includes('<!-- orbit:src prompt u2 -->') && raw.includes('<!-- orbit:src answer a1 -->'), '상태 파일에 조각별 출처 uuid 표시');
+ok(!/^\d+\. \/compact/m.test(raw), '/compact 자체는 사용자 입력에 넣지 않음');
+const boundary = (preserved) => JSON.stringify({ type: 'system', subtype: 'compact_boundary', compactMetadata: { trigger: 'manual', ...(preserved ? { preservedMessages: { uuids: preserved } } : {}) } });
+const T2 = path.join(ROOT, '..', 't67b.jsonl');
+fs.writeFileSync(T2, lines.join('\n') + '\n' + boundary(['u2', 'a1', 'zz']) + '\n');
+const r1 = run('compact-restore', { session_id: 's67', source: 'compact', transcript_path: T2 });
+ok(r1.status === 0 && !r1.stdout.includes('마지막 답변 67') && !r1.stdout.includes('컴팩션 직전 마지막 답변'), '남은 마지막 답변은 절째 빠짐');
+ok(!r1.stdout.includes('요청 B 67') && /^1\. 요청 A 67/m.test(r1.stdout) && r1.stdout.includes('1개는 컴팩션 뒤 남은 대화에'), '남은 사용자 입력은 빠지고 번호 다시·뺀 수 한 줄');
+ok(!r1.stdout.includes('orbit:src'), '주입 글에 출처 표시가 남지 않음');
+const T3 = path.join(ROOT, '..', 't67c.jsonl');
+fs.writeFileSync(T3, lines.join('\n') + '\n' + boundary(null) + '\n');
+const r2 = run('compact-restore', { session_id: 's67', source: 'compact', transcript_path: T3 });
+ok(r2.stdout.includes('마지막 답변 67') && /^2\. 요청 B 67/m.test(r2.stdout) && !r2.stdout.includes('orbit:src') && !r2.stdout.includes('남은 대화에'), '경계에 남긴 목록이 없으면 다 넣음(표시만 지움)');
+const r3 = run('compact-restore', { session_id: 's67', source: 'compact' });
+ok(r3.status === 0 && r3.stdout.includes('마지막 답변 67'), '세션 기록 경로가 없어도 실패하지 않고 다 넣음');
+fs.writeFileSync(stateFile, '# 컴팩션 전 상태\n\n## 마지막 worklog 기록 뒤 사용자 입력 (원문, 오래된 순)\n1. 옛 요청 67\n\n## 컴팩션 직전 마지막 답변 (앞부분)\n옛 답변 67\n');
+const r4 = run('compact-restore', { session_id: 's67', source: 'compact', transcript_path: T2 });
+ok(r4.stdout.includes('1. 옛 요청 67') && r4.stdout.includes('옛 답변 67'), '표시 없는 옛 상태 파일은 그대로 넣음');
+process.exit(failed ? 1 : 0);
+NODE
+S67_OUT="$(cd "$R67" && R67B="$R67B" node "$WORK/scenario67.cjs")"; S67_RC=$?
+echo "${S67_OUT}"
+[ "${S67_RC}" = "0" ] || fail "시나리오 67 하위 항목 실패(위 ❌ 확인)"
 
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."

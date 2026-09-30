@@ -51,9 +51,9 @@
 
 | 파일 | 역할 |
 |---|---|
-| `worklog.mjs` | 작업 일지 CLI(append/summary/found/catchup/recent). 세션·에이전트 사이 턴 기록. append의 선택 칸 `--decision`(판단, 옛 이름 `--why`)·`--found`(발견), 이미 쓴 항목에 발견을 덧붙이는 `found`. `catchup`은 작성자 이름별 책갈피로 따라잡기(소비), `recent`는 최근 8턴과 그 앞 구간 요약을 주입하는 읽기 전용 명령(`--mode compact`면 머리글 '컴팩션 전 기록'). |
+| `worklog.mjs` | 작업 일지 CLI(append/summary/found/catchup/recent). 세션·에이전트 사이 턴 기록. append의 선택 칸 `--decision`(판단, 옛 이름 `--why`)·`--found`(발견), 이미 쓴 항목에 발견을 덧붙이는 `found`. `catchup`은 작성자 이름별 책갈피로 따라잡기(소비), `recent`는 최근 8턴과 그 앞 구간 요약을 주입하는 읽기 전용 명령(`--mode compact`면 머리글 '컴팩션 전 기록'). 8턴과 겹치는 요약은 넣지 않고, 요약도 8턴도 덮지 않는 사이 턴은 원문으로(글자 상한을 넘으면 번호와 찾는 명령 한 줄로) 넣는다. |
 | `worklog-hook.mjs` | 세션·턴 상태 훅. 매 턴 일지 미기록을 감지하고 종료를 막는다(begin/stop). 도구를 많이 쓴 턴에 '발견' 칸이 비면 한 번 알린다. |
-| `memory-hook.mjs` | 기억 훅: precompact(상태 파일), compact-restore(SessionStart compact 주입), postcompact(요약 저장), turn-start(git 지문), stop(대화 글 사본·도구 색인), pre-tool(파일별 기억 목록·큰 파일 개요 안내). |
+| `memory-hook.mjs` | 기억 훅: precompact(상태 파일), compact-restore(SessionStart compact 주입 — 컴팩션이 원문 그대로 남긴 메시지에서 나온 조각은 뺌), postcompact(요약 저장), turn-start(git 지문), stop(대화 글 사본·도구 색인), pre-tool(파일별 기억 목록·큰 파일 개요 안내). |
 | `memory-lib.mjs` | 기억 훅 공용: 세션 기록 파서, 상태 폴더, 잠금, git 지문, 저장소 상대 경로, 기억 번호. |
 | `memory.mjs` | 기억 CLI: `search`(ADR·위키·worklog·대화 사본·도구 활동, 번호 목록), `show <번호>`, `forget <문구> [--apply]`(/forget 스킬이 부름). |
 | `redact.mjs` | 기억 파일에 넣기 전 알려진 모양의 비밀값을 가린다. |
