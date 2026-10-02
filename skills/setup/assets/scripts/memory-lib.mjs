@@ -108,7 +108,15 @@ export function isHumanPrompt(entry) {
   if (parts.some((part) => part?.type === 'tool_result')) return false;
   const text = textOf(entry).trim();
   if (!text || text.startsWith('[Request interrupted')) return false;
+  // 슬래시 명령의 출력·안내 줄(/context 표, "Compacted …" 등)은 사람이 쓴 글이 아니다.
+  if (/^<local-command-(stdout|stderr|caveat)>/.test(text)) return false;
   return true;
+}
+
+// 컴팩션을 부른 /compact 입력. 세션 기록에는 글자 그대로("/compact 초점")이거나 태그 모양
+// ("<command-name>/compact</command-name>…")으로 남는다.
+export function isCompactCommand(text) {
+  return /^\/compact(\s|$)/.test(text) || /<command-name>\/compact<\/command-name>/.test(text.slice(0, 400));
 }
 
 export function isNotification(text) {

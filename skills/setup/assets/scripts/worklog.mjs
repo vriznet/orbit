@@ -16,7 +16,7 @@
 //   summary <작성자> "<요약>"           최근 턴들을 하나로 묶어 요약한다 (3턴마다)
 //   found <작성자> <N> "<발견>"         이미 적은 항목 #N에 '- 발견:' 줄을 덧붙인다(종료 훅 알림용, 이미 있으면 거부)
 //   catchup <작성자>                    책갈피 이후 밀린 내용을 보여주고 책갈피를 옮긴다 (없으면 조용)
-//   recent <작성자> [--mode compact]     최근 턴 8개와 그 앞 구간 요약들을 보여준다 (읽기 전용)
+//   recent <작성자> [--mode compact] [--limit 글자수]  최근 턴 8개와 그 앞 구간 요약들을 보여준다 (읽기 전용)
 //
 // 안전 원칙: 책갈피는 "덜 옮기면 다시 읽기(무해)" 쪽으로만 실수하게. 앞질러 건너뛰지 않는다.
 // --commit: worklog를 별도 커밋으로 뒤에 미루지 말고, 작업 커밋에 함께 태우기 위한 것.
@@ -403,18 +403,26 @@ function catchup(agent) {
 // recent — 세션 시작과 컴팩션 직후에 최근 맥락을 주입한다. catchup과 달리 책갈피를
 // 소비하지 않는(읽기 전용) 명령이라 병렬·연속 세션이 모두 동일하게 받는다. 시점별 기억만으로는
 // 놓치기 쉬운 번복·폐기를 시간순 로그로 메운다. 결정: D-프로젝트-기억-분담(결정 3·4).
-// 출력은 최근 턴 8개와, 그 8턴보다 앞 구간을 덮는 요약들이다. 요약은 3턴마다 직전 3턴만 덮어
-// 최신 요약이 늘 최근 8턴과 겹치므로, 8턴과 한 턴이라도 겹치는 요약은 넣지 않는다(끝 번호로
-// 가린다). 그러면 요약도 8턴도 덮지 않는 턴(요약 끝~8턴 앞)이 생길 수 있어, 그 턴은 글자 상한
-// 안이면 원문으로 8턴 앞에 붙이고, 넘치면 번호와 찾는 명령만 한 줄로 알린다(조용히 빠뜨리지 않는다).
-// 훅이 묶어 적은 백그라운드 알림 항목은 모델이 쓴 기록과 겹치고 주입 칸만 차지해 뺀다.
+// 출력은 최근 턴 8개와, 그 8턴보다 앞 구간을 덮는 요약들이다(새것부터, 개수·글자 상한 안).
+// 8턴과 겹치는 요약(앞 끝만 창 밖)은 같은 턴을 요약과 원문으로 두 번 넣게 되므로 이렇게 가린다.
+//   - 그 요약 대신 넣을 사이 턴(요약 끝~8턴 앞)이 2개 이하이고 상한 안이면 사이 턴을 원문으로 넣는다.
+//   - 사이 턴이 더 많거나 상한을 넘으면 겹치더라도 그 요약을 넣는다(턴 수십 개를 원문으로 넣거나
+//     그 구간을 통째로 잃는 것보다 낫다).
+// 원문으로도 요약으로도 넣지 못한 턴(글자 상한, 요약 없는 긴 구간)은 머리글에 번호로 적는다(조용히 빠뜨리지 않는다). 훅이 묶어 적은
+// 백그라운드 알림 항목은 모델이 쓴 기록과 겹치고 주입 칸만 차지해 뺀다.
 const RECENT_TURNS = 8;
+const RECENT_GAP_TURNS = 2;
 const RECENT_SUMMARY_MAX = 5;
 const RECENT_SUMMARY_CHARS = 3000;
 const RECENT_TOTAL_CHARS = 9000; // 훅 출력 상한(10,000자) 안에 머문다
+const RECENT_HEADER_ROOM = 200; // 머리글 몫
 const NOTICE_BUNDLE_MARK = '사용자 턴 사이에 도착한 백그라운드 작업 알림을 훅이 묶어 기록함';
 
-function recent(mode) {
+function numberRange(numbers) {
+  return numbers.length === 1 ? `#${numbers[0]}` : `#${numbers[0]}~#${numbers[numbers.length - 1]}`;
+}
+
+function recent(mode, limit) {
   if (!fs.existsSync(LOG)) return;
   const blocks = fs
     .readFileSync(LOG, 'utf8')
@@ -430,42 +438,55 @@ function recent(mode) {
     if (turn && !block.includes(NOTICE_BUNDLE_MARK)) turns.push({ n: Number(turn[1]), text: block });
     else if (range) summaries.push({ from: Number(range[1]), to: Number(range[2]), text: block });
   }
-  const recentTurns = turns.slice(-RECENT_TURNS);
-  const windowStart = recentTurns.length ? recentTurns[0].n : Infinity;
+  const asked = Number(limit);
+  const budget = Math.max(0, (Number.isFinite(asked) && asked > 0 ? Math.min(asked, RECENT_TOTAL_CHARS) : RECENT_TOTAL_CHARS) - RECENT_HEADER_ROOM);
+  const cost = (text) => text.length + 2; // 블록 사이 빈 줄
+
+  // 1) 최근 턴: 상한을 넘으면 오래된 것부터 빼고 번호를 적어 둔다.
+  const window = turns.slice(-RECENT_TURNS);
+  const cut = [];
+  let used = window.reduce((sum, t) => sum + cost(t.text), 0);
+  while (window.length > 1 && used > budget) {
+    const dropped = window.shift();
+    used -= cost(dropped.text);
+    cut.push(dropped.n);
+  }
+  const windowStart = window.length ? window[0].n : Infinity;
+
+  // 2) 사이 턴: 창 앞 요약의 끝과 창 사이. 창 앞 요약이 없으면 창과 겹치는 요약이 덮던 앞 끝부터 센다.
+  const byNewest = (a, b) => b.to - a.to;
+  const before = summaries.filter((s) => s.to < windowStart).sort(byNewest);
+  const overlapping = summaries.filter((s) => s.from < windowStart && s.to >= windowStart).sort(byNewest);
+  const gapStart = before.length ? before[0].to + 1 : overlapping.length ? Math.min(...overlapping.map((s) => s.from)) : windowStart;
+  const gap = cut.length ? [] : turns.filter((t) => t.n >= gapStart && t.n < windowStart);
+  const gapCost = gap.reduce((sum, t) => sum + cost(t.text), 0);
+  const gapAsRaw = gap.length > 0 && gap.length <= RECENT_GAP_TURNS && used + gapCost <= budget;
+  if (gapAsRaw) used += gapCost;
+
+  // 3) 요약: 새것부터. 사이 턴을 원문으로 넣었으면 창과 겹치는 요약은 뺀다.
   const picked = [];
   let summaryChars = 0;
-  for (const summary of summaries.filter((s) => s.to < windowStart).sort((a, b) => b.to - a.to)) {
+  for (const summary of cut.length ? [] : gapAsRaw ? before : [...overlapping, ...before].sort(byNewest)) {
     if (picked.length >= RECENT_SUMMARY_MAX || summaryChars + summary.text.length > RECENT_SUMMARY_CHARS) break;
+    if (used + cost(summary.text) > budget) break;
     picked.push(summary);
     summaryChars += summary.text.length;
+    used += cost(summary.text);
   }
   picked.sort((a, b) => a.to - b.to);
-  // 고른 요약의 끝과 8턴 사이에 어느 쪽도 덮지 않는 턴. 고른 요약이 없으면 창과 겹쳐 뺀 요약이
-  // 덮던 앞 끝부터 센다(그 요약이 대신하던 턴을 조용히 잃지 않게). 요약이 아예 없으면 빈 구간도 없다.
-  const overlapping = summaries.filter((s) => s.from < windowStart && s.to >= windowStart);
-  const gapStart = picked.length
-    ? picked[picked.length - 1].to + 1
-    : overlapping.length ? Math.min(...overlapping.map((s) => s.from)) : windowStart;
-  const gap = turns.filter((t) => t.n >= gapStart && t.n < windowStart);
-  const items = [
-    ...picked.map((s) => ({ kind: 'summary', text: s.text })),
-    ...gap.map((t) => ({ kind: 'gap', text: t.text })),
-    ...recentTurns.map((t) => ({ kind: 'turn', text: t.text })),
-  ];
-  const size = (list) => list.map((item) => item.text).join('\n\n').length;
-  if (gap.length && size(items) > RECENT_TOTAL_CHARS) {
-    const numbers = gap.length === 1 ? `#${gap[0].n}` : `#${gap[0].n}~#${gap[gap.length - 1].n}`;
-    const note = { kind: 'note', text: `## [${numbers} 생략] 글자 상한으로 원문을 넣지 않음 — \`node scripts/memory.mjs show ${gap.map((t) => `#${t.n}`).join(' ')}\`` };
-    items.splice(picked.length, gap.length, note);
-  }
-  let parts = items;
-  while (size(parts) > RECENT_TOTAL_CHARS && parts.length > 1) parts = parts.slice(1);
+  // 원문으로도 요약으로도 들어가지 못한 사이 턴
+  const lost = gapAsRaw ? [] : gap.filter((t) => !picked.some((s) => s.from <= t.n && t.n <= s.to)).map((t) => t.n);
+  const missing = [...lost, ...cut.sort((a, b) => a - b)];
+
+  const parts = [...picked.map((s) => s.text), ...(gapAsRaw ? gap.map((t) => t.text) : []), ...window.map((t) => t.text)];
   if (!parts.length) return;
-  const count = (kind) => parts.filter((item) => item.kind === kind).length;
-  const between = count('gap') ? ` + 사이 턴 ${count('gap')}` : count('note') ? ' + 사이 턴 생략 안내' : '';
+  const between = gapAsRaw ? ` + 사이 턴 ${gap.length}` : '';
+  // show는 번호를 하나씩 받는다(#a~b는 그 범위의 요약 항목). 번호가 많으면 앞의 몇 개만 예로 든다.
+  const example = missing.slice(0, 4).map((n) => `#${n}`).join(' ') + (missing.length > 4 ? ' …' : '');
+  const omitted = missing.length ? ` · 넣지 못한 턴 ${numberRange(missing)} — node scripts/memory.mjs show ${example}` : '';
   const title = mode === 'compact' ? '컴팩션 전 기록' : '이전 세션 최근 맥락';
-  process.stdout.write(`── ${title} (worklog 앞 구간 요약 ${count('summary')}${between} + 최근 턴 ${count('turn')}) ──\n\n`);
-  process.stdout.write(parts.map((item) => item.text).join('\n\n') + '\n');
+  process.stdout.write(`── ${title} (worklog 앞 구간 요약 ${picked.length}${between} + 최근 턴 ${window.length}${omitted}) ──\n\n`);
+  process.stdout.write(parts.join('\n\n') + '\n');
 }
 
 // --commit "<메시지>" 를 인자에서 분리 (append 직후 작업 커밋에 함께 태운다)
@@ -484,6 +505,7 @@ const hookSessionId = takeOption('--session-id');
 const hookTurnToken = takeOption('--turn-token');
 const hookTurnId = takeOption('--turn-id');
 const recentMode = takeOption('--mode');
+const recentLimit = takeOption('--limit');
 // 결정 근거 칸: 새 이름 --decision, 옛 이름 --why(0.2.0~0.2.2)도 받는다. 기록 줄 머리는 '- 판단:' 그대로.
 const decisionText = takeOption('--decision');
 const legacyWhyText = takeOption('--why');
@@ -517,7 +539,7 @@ if (cmd === 'append') {
   summary(agent, a ?? '');
   if (commitMsg !== null) gitCommitAll(commitMsg);
 } else if (cmd === 'catchup') catchup(agent);
-else if (cmd === 'recent') recent(recentMode);
+else if (cmd === 'recent') recent(recentMode, recentLimit);
 else {
   process.stderr.write('사용법: worklog <append|summary|found|catchup|recent> <작성자(claude|codex|…)> ... [--commit "메시지"] [--session-id ID --turn-token TOKEN | --session-id ID --turn-id N] [--why 판단] [--found 발견] [--mode compact]\n');
   process.exit(1);

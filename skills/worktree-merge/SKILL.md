@@ -33,6 +33,8 @@ node scripts/worktree-merge-inspect.mjs $ARGUMENTS
 
 ### 3. 진행 시 — 분기 유형에 따라 병합
 
+병합을 시작하기 전에 기본 브랜치의 지금 커밋을 적어 둔다: `git rev-parse HEAD`. 6단계 정합 검사에서 `<병합 전 기본 브랜치>`로 쓴다(재번호 커밋을 만들기 전의 값이어야 한다).
+
 **fast-forward인 경우** (진단이 "fast-forward"라고 표시):
 1. 기본 브랜치 작업 트리의 미커밋 원장 변경을 커밋하거나 `git restore`로 되돌린다(무엇을 되돌리는지 사용자에게 한 줄로 알린다).
 2. `git merge --no-ff --no-edit <브랜치명>` — 병합 흔적을 남긴다.
