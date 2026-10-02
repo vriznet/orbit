@@ -108,8 +108,9 @@ export function isHumanPrompt(entry) {
   if (parts.some((part) => part?.type === 'tool_result')) return false;
   const text = textOf(entry).trim();
   if (!text || text.startsWith('[Request interrupted')) return false;
-  // 슬래시 명령의 출력·안내 줄(/context 표, "Compacted …" 등)은 사람이 쓴 글이 아니다.
-  if (/^<local-command-(stdout|stderr|caveat)>/.test(text)) return false;
+  // 슬래시 명령의 출력·안내 줄(/context 표, "Compacted …" 등)과 `! 명령`의 출력은 사람이 쓴 글이 아니다.
+  // 사람이 친 `! 명령` 자체(<bash-input>)는 사람 입력으로 둔다.
+  if (/^<(local-command-(stdout|stderr|caveat)|bash-(stdout|stderr))>/.test(text)) return false;
   return true;
 }
 

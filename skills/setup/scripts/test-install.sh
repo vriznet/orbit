@@ -2036,7 +2036,7 @@ S66_OUT="$(cd "$R66" && PLUGIN_ROOT="$(cd "$SKILL_DIR/../.." && pwd)" node "$WOR
 echo "${S66_OUT}"
 [ "${S66_RC}" = "0" ] || fail "시나리오 66 하위 항목 실패(위 ❌ 확인)"
 
-echo "== 시나리오 67: 컴팩션 복원 중복 줄이기 — 턴 끝이면 마지막 답변 생략·겹치는 요약 가리기·상한 표시(0.2.7) =="
+echo "== 시나리오 67: 컴팩션 복원 중복 줄이기 — 턴 끝이면 마지막 답변 생략·겹치는 요약 가리기·상한 표시(0.2.7·0.2.8) =="
 R67="$WORK/scenario67"
 new_repo "$R67"
 node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R67" --project-name "Scenario67" --slug scenario67 --mode new >/dev/null 2>&1
@@ -2046,12 +2046,21 @@ node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R67B" --project-name "Scena
 R67C="$WORK/scenario67c"
 new_repo "$R67C"
 node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R67C" --project-name "Scenario67C" --slug scenario67c --mode new >/dev/null 2>&1
+R67D="$WORK/scenario67d"
+new_repo "$R67D"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R67D" --project-name "Scenario67D" --slug scenario67d --mode new >/dev/null 2>&1
 cat > "$WORK/scenario67.cjs" <<'NODE'
 const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
 const ROOT = process.cwd();
 let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
 const wl = (cwd, ...args) => spawnSync(process.execPath, ['scripts/worklog.mjs', ...args], { cwd, encoding: 'utf8' });
 const count = (text, re) => (text.match(re) || []).length;
+// 머리글의 수(요약·사이 턴·최근 턴)가 실제로 넣은 블록 수와 같은가
+const headerMatches = (out) => {
+  const head = out.split('\n')[0];
+  const num = (re) => Number((head.match(re) || [0, 0])[1]);
+  return num(/앞 구간 요약 (\d+)/) === count(out, /^## \[요약 /gm) && num(/사이 턴 (\d+)/) + num(/최근 턴 (\d+)/) === count(out, /^## \[#\d+\]/gm);
+};
 // 1) recent: 사이 턴이 2개 이하이고 상한 안이면 겹치는 요약 대신 사이 턴 원문
 for (let i = 1; i <= 12; i += 1) { wl(ROOT, 'append', 'claude', `물음${i}`, `결과${i}`); if (i % 3 === 0) wl(ROOT, 'summary', 'claude', `요약${i}`); }
 for (const mode of [['--mode', 'compact'], []]) {
@@ -2078,11 +2087,20 @@ ok(outC.includes('[요약 #1~20]') && count(outC, /^## \[#\d+\]/gm) === 8, '사�
 for (let i = 25; i <= 32; i += 1) wl(C, 'append', 'claude', `물음${i}`, '다'.repeat(1150));
 const outC2 = wl(C, 'recent', 'claude', '--mode', 'compact').stdout;
 const head2 = outC2.split('\n')[0];
-ok(/최근 턴 7/.test(head2) && /넣지 못한 턴 #25/.test(head2) && count(outC2, /^## \[#\d+\]/gm) === 7 && outC2.length <= 9000, `상한으로 뺀 턴이 머리글에 남음(${outC2.length}자)`);
+ok(/최근 턴 7/.test(head2) && /넣지 못한 턴 #25 /.test(head2) && outC2.length <= 9000 && headerMatches(outC2), `상한으로 뺀 턴이 머리글에 남고 숫자가 실제와 같음(${outC2.length}자)`);
+// 창을 줄여도 남는 자리에는 요약과 요약 없는 사이 턴(#21~#24)을 넣는다(0.2.8)
+ok(outC2.includes('[요약 #1~20]') && /^## \[#24\]/m.test(outC2) && /사이 턴 4/.test(head2), '창을 줄인 뒤에도 남는 자리에 요약·사이 턴을 넣음');
 const outC3 = wl(C, 'recent', 'claude', '--mode', 'compact', '--limit', '4000').stdout;
-const head3 = outC3.split('\n')[0];
-const said = Number((head3.match(/최근 턴 (\d+)/) || [])[1]);
-ok(outC3.length <= 4000 && said === count(outC3, /^## \[#\d+\]/gm) && /넣지 못한 턴/.test(head3), `--limit 4000을 지키고 머리글 숫자가 실제와 같음(${outC3.length}자, 턴 ${said})`);
+ok(outC3.length <= 4000 && headerMatches(outC3) && /넣지 못한 턴/.test(outC3.split('\n')[0]), `--limit 4000을 지키고 머리글 숫자가 실제와 같음(${outC3.length}자)`);
+// 4-1) 창을 줄이며 뺀 턴을 요약이 덮으면 넣지 못한 턴이 아니다(0.2.8)
+const D = process.env.R67D;
+for (let i = 1; i <= 12; i += 1) { wl(D, 'append', 'claude', `물음${i}`, '라'.repeat(1150)); if (i % 3 === 0) wl(D, 'summary', 'claude', `요약${i}`); }
+const outD = wl(D, 'recent', 'claude', '--mode', 'compact').stdout;
+ok(/최근 턴 7/.test(outD) && outD.includes('[요약 #4~6]') && !outD.includes('넣지 못한 턴') && headerMatches(outD), '뺀 턴(#5)과 사이 턴(#4)을 겹치는 요약이 덮어 잃는 턴 없음');
+// 4-2) 어떤 요약도 덮지 않는 사이 턴은 자리가 남는 만큼 원문으로(0.2.8)
+for (let i = 13; i <= 26; i += 1) wl(ROOT, 'append', 'claude', `물음${i}`, `결과${i}`);
+const outE = wl(ROOT, 'recent', 'claude').stdout;
+ok(/사이 턴 6/.test(outE) && /^## \[#13\]/m.test(outE) && !outE.includes('넣지 못한 턴') && headerMatches(outE), '요약이 끊긴 구간(#13~#18)은 원문으로 넣음');
 // 5) 상태 파일: 턴이 끝난 상태면 마지막 답변을 넣지 않는다(Claude Code가 꼬리를 원문으로 남김), 턴 중간이면 넣는다
 const run = (mode, input, env = {}) => spawnSync(process.execPath, ['scripts/memory-hook.mjs', mode], { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, ...env } });
 const user = (uuid, text) => JSON.stringify({ type: 'user', uuid, message: { role: 'user', content: text } });
@@ -2093,14 +2111,15 @@ const oldBoundary = JSON.stringify({ type: 'system', subtype: 'compact_boundary'
 const turnEnd = [oldBoundary, user('u1', '요청 A 67'), answer('x1', '중간 답'), user('u2', '요청 B 67'), answer('a1', '마지막 답변 67'),
   user('c1', '<local-command-stdout>## Context Usage 67</local-command-stdout>'),
   user('c2', '<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>'),
-  user('c3', '<local-command-stdout>Compacted 67</local-command-stdout>')];
+  user('c3', '<local-command-stdout>Compacted 67</local-command-stdout>'),
+  user('c4', '<bash-stdout>명령 출력 67</bash-stdout>')];
 const T = path.join(ROOT, '..', 't67.jsonl');
 fs.writeFileSync(T, turnEnd.join('\n') + '\n');
 run('precompact', { session_id: 's67', transcript_path: T, trigger: 'manual' });
 const stateFile = path.join(ROOT, '.git', 'orbit-state', 'compact', 's67.md');
 const raw = fs.readFileSync(stateFile, 'utf8');
 ok(!raw.includes('마지막 답변 67') && !raw.includes('컴팩션 직전 마지막 답변'), '턴이 끝난 상태의 컴팩션: 마지막 답변 절을 넣지 않음');
-ok(/^1\. 요청 A 67/m.test(raw) && /^2\. 요청 B 67/m.test(raw) && !/^3\. /m.test(raw), '사용자 입력은 그대로(슬래시 명령 출력·/compact 태그 모양은 제외)');
+ok(/^1\. 요청 A 67/m.test(raw) && /^2\. 요청 B 67/m.test(raw) && !/^3\. /m.test(raw), '사용자 입력은 그대로(슬래시 명령 출력·`!` 명령 출력·/compact 태그 모양은 제외)');
 ok(!raw.includes('orbit:src'), '상태 파일에 출처 표시 없음');
 // 실제 순서: 복원 훅이 도는 순간 이번 경계는 아직 기록에 없다(앞 컴팩션의 묵은 경계만 있음) → 묵은 목록으로 빼지 않는다
 const r1 = run('compact-restore', { session_id: 's67', source: 'compact', transcript_path: T });
@@ -2118,7 +2137,7 @@ const r2 = run('compact-restore', { session_id: 's67', source: 'compact', transc
 ok(r2.stdout.includes('1. 옛 요청 67') && !r2.stdout.includes('orbit:src'), '0.2.6이 쓴 상태 파일의 출처 표시 줄은 지우고 내용은 넣음');
 process.exit(failed ? 1 : 0);
 NODE
-S67_OUT="$(cd "$R67" && R67B="$R67B" R67C="$R67C" node "$WORK/scenario67.cjs")"; S67_RC=$?
+S67_OUT="$(cd "$R67" && R67B="$R67B" R67C="$R67C" R67D="$R67D" node "$WORK/scenario67.cjs")"; S67_RC=$?
 echo "${S67_OUT}"
 [ "${S67_RC}" = "0" ] || fail "시나리오 67 하위 항목 실패(위 ❌ 확인)"
 
