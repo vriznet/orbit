@@ -348,11 +348,6 @@ function reviewText(db) {
 // 원장을 바꾸는 명령(add/done/drop/edit/init/review)은 load→mutate→원장 쓰기→render까지
 // 잠금 안에서 한 번에 수행한다 — Claude·Codex가 동시에 실행해도 기록이 사라지거나
 // 파생 뷰(tasks.md·미러)가 방금 persist한 db보다 오래된 것으로 덮어써지지 않는다(R04).
-// list는 원장을 바꾸지 않으므로 잠금 밖에서 그대로 읽는다.
-// ── 명령 ──────────────────────────────────────────────
-// 원장을 바꾸는 명령(add/done/drop/edit/init/review)은 load→mutate→원장 쓰기→render까지
-// 잠금 안에서 한 번에 수행한다 — Claude·Codex가 동시에 실행해도 기록이 사라지거나
-// 파생 뷰(tasks.md·미러)가 방금 persist한 db보다 오래된 것으로 덮어써지지 않는다(R04).
 // list·check는 원장을 바꾸지 않으므로 잠금 밖에서 그대로 읽는다.
 // 인자·규칙 검사는 잠금을 잡기 전에 한다 — 거부된 명령이 잠금을 잡았다 놓는 일도 없게.
 const [cmd, ...rest] = process.argv.slice(2);
