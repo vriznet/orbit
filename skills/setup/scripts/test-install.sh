@@ -2030,6 +2030,22 @@ const keys = Object.keys(manifest().files);
 ok(!keys.some((k) => k in old && k !== '.claude/skills/recall/SKILL.md') && keys.includes('.claude/skills/recall/SKILL.md'), '매니페스트: 지운 것은 기록 삭제, 남긴 것은 유지');
 const again = JSON.parse(spawnSync(process.execPath, [INSTALL, 'update', '--repo', ROOT], { encoding: 'utf8', env: { ...process.env, ORBIT_CODE_TOOLS: 'skip' } }).stdout || '{}');
 ok(again.retired?.removed.length === 0 && again.retired.kept.length === 1, '다시 update하면 지울 것 없음·고친 사본은 계속 알림');
+
+// 3) RETIRED_PATHS 밖의 묵은 기록: 디스크에 없고 이번 판이 만들지 않으면 기록만 지운다.
+//    디스크에 있는 기록(이번에 만들지 않아도)은 그대로, 지운 기록의 파일을 새로 만들지도 않는다.
+const m3 = manifest();
+const stale = ['.claude/skills/continuous-learning-v2/SKILL.md', '.claude/rules/ecc/common/patterns.md', 'docs-x/wiki/_templates/note.md'];
+for (const rel of stale) m3.files[rel] = 'sha256:' + '0'.repeat(64);
+fs.mkdirSync(path.join(ROOT, 'notes'), { recursive: true }); fs.writeFileSync(path.join(ROOT, 'notes/kept.md'), '남은 파일\n');
+m3.files['notes/kept.md'] = `sha256:${crypto.createHash('sha256').update('남은 파일\n').digest('hex')}`;
+fs.writeFileSync(MANIFEST, JSON.stringify(m3, null, 2));
+const third = JSON.parse(spawnSync(process.execPath, [INSTALL, 'update', '--repo', ROOT], { encoding: 'utf8', env: { ...process.env, ORBIT_CODE_TOOLS: 'skip' } }).stdout || '{}');
+ok(stale.every((k) => third.retired?.forgotten.includes(k)) && !third.retired.forgotten.includes('notes/kept.md'), `묵은 기록 3개는 forgotten, 디스크에 있는 기록은 아님(${JSON.stringify(third.retired?.forgotten)})`);
+const keys3 = Object.keys(manifest().files);
+ok(!stale.some((k) => keys3.includes(k)) && keys3.includes('notes/kept.md') && keys3.includes('.claude/skills/recall/SKILL.md'), '매니페스트: 묵은 기록 삭제, 디스크에 있는 기록·고친 사본 기록 유지');
+ok(!stale.some((k) => exists(k)), '지운 기록의 파일을 새로 만들지 않음');
+const fourth = JSON.parse(spawnSync(process.execPath, [INSTALL, 'update', '--repo', ROOT], { encoding: 'utf8', env: { ...process.env, ORBIT_CODE_TOOLS: 'skip' } }).stdout || '{}');
+ok(fourth.retired?.forgotten.length === 0, '다시 update하면 forgotten 없음');
 process.exit(failed ? 1 : 0);
 NODE
 S66_OUT="$(cd "$R66" && PLUGIN_ROOT="$(cd "$SKILL_DIR/../.." && pwd)" node "$WORK/scenario66.cjs")"; S66_RC=$?

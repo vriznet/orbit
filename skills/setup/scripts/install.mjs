@@ -603,6 +603,14 @@ for (const key of Object.keys(manifest?.files ?? {})) {
   if (manifestHashMatches(key, fs.readFileSync(file))) { retired.removed.push(key); retiredKeys.add(key); }
   else retired.kept.push(key); // 고친 사본은 남긴다(매니페스트 기록도 남겨 다음 update에서 다시 알린다)
 }
+// RETIRED_PATHS에 없더라도, 이번 실행이 만들지 않고 디스크에도 없는 파일의 기록은 붙들 이유가
+// 없다(예: 옛 판에서 지운 산출물·통합된 템플릿). 남겨 두면 매 update마다 영구히 따라다닌다.
+// 디스크에 있는 파일은 이번에 만들지 않아도(플래그 없는 upgrade의 이전 모듈 산출물 등) 그대로 둔다.
+const producedKeys = new Set(operations.map((op) => op.manifestKey));
+for (const key of Object.keys(manifest?.files ?? {})) {
+  if (retiredKeys.has(key) || producedKeys.has(key) || fs.existsSync(path.join(repo, key))) continue;
+  retired.forgotten.push(key); retiredKeys.add(key);
+}
 
 // N01 게이트 — 어떤 파일도 바꾸기 전에, 렌더된 .mjs 산출물이 전부 실제로 파싱 가능한지
 // 확인한다. plan·apply 공통 경로(여기는 operations 구성 직후, conflicts 판정과 무관하게

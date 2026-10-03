@@ -81,6 +81,7 @@
 (`/orbit:recall`처럼 플러그인 이름공간으로 부른다). 스킬은 저장소의 `.claude/orbit-manifest.json`(`docsDir`)과 `scripts/`를 쓰며,
 orbit이 없는 저장소에서는 멈춘다. `/aside`·`/checkpoint` 명령은 0.2.4에서 뺐다. update는 예전에 설치한 이 사본들을 설치 그대로일 때만 지우고,
 고친 사본은 남긴 채 요약 `retired.kept`로 알린다.
+이 목록 밖이라도 이번 실행이 만들지 않고 디스크에도 없는 파일(옛 판에서 지운 산출물 등)의 매니페스트 기록은 지우고 `retired.forgotten`으로 알린다.
 
 ### 3.4 `assets/docs/` — 문서 볼트 스캐폴딩
 
