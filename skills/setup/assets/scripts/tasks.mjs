@@ -12,6 +12,14 @@
 //   node scripts/tasks.mjs edit <id> --key value ...   (같은 플래그로 수정)
 //   node scripts/tasks.mjs list
 //   node scripts/tasks.mjs review            (열린 Next Action + 기한 지난 Planning + Waiting 출력 + 미러 갱신)
+//   node scripts/tasks.mjs check             (원장 규칙 검사 — 위반이 있으면 목록과 함께 종료 코드 1)
+//
+// 원장 규칙(불변식)은 이 스크립트가 지킨다. AI가 규칙을 기억하느냐에 기대지 않는다.
+//   - Planning은 실제 날짜의 예정일(--due YYYY-MM-DD)이 있어야 한다.
+//   - Waiting은 기다리는 대상(--wait)이 비어 있으면 안 된다.
+//   - --due는 어느 버킷이든 YYYY-MM-DD의 실제 날짜여야 한다.
+// add·edit는 바뀐 뒤의 할일로 검사해 어긋나면 원장을 건드리지 않고 거부한다(잠금을 잡기 전에).
+// 이미 어긋난 원장은 고치지 않고 review·list 첫 줄과 check로 드러낸다 — 어느 버킷이 맞는지는 사람이 정한다.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -33,6 +41,13 @@ const BUCKETS = [
   { key: 'waiting', title: '⏸️ Waiting', hint: '다른 할일·조건·사람을 기다림' },
   { key: 'someday', title: '💭 Someday', hint: '언젠가·미정' },
 ];
+
+// 사용자에게 보여 줄 오류. 잠금 안에서 process.exit를 부르면 finally가 돌지 않아 잠금 디렉터리가
+// 남는다(tail에서 실제로 봄: edit를 id 없이 불렀을 때). 그래서 던지고, 맨 바깥에서 잠금이 풀린 뒤 끝낸다.
+class TaskError extends Error {}
+function fail(...lines) {
+  throw new TaskError(lines.join('\n'));
+}
 
 function today() {
   const d = new Date();
@@ -163,8 +178,7 @@ function load() {
   } catch (error) {
     const backup = `${DATA}.corrupt-${Date.now()}`;
     try { fs.copyFileSync(DATA, backup); } catch {}
-    console.error(`${DATA} 파싱 실패 — 손상된 파일을 ${backup}로 복사해 뒀습니다. 직접 복구한 뒤 다시 시도하세요.\n${error.message}`);
-    process.exit(1);
+    fail(`${DATA} 파싱 실패 — 손상된 파일을 ${backup}로 복사해 뒀습니다. 직접 복구한 뒤 다시 시도하세요.`, error.message);
   }
 }
 // render(파생 뷰)는 persistData 직후 잠금을 쥔 채로 호출한다 — 잠금 밖에서 하면
@@ -174,22 +188,61 @@ function persistData(db) {
   atomicWriteFile(DATA, JSON.stringify(db, null, 2) + '\n');
 }
 function validateEnum(flag, value, allowed) {
-  if (!allowed.includes(value)) {
-    console.error(`--${flag} 값이 올바르지 않습니다: "${value}" (허용: ${allowed.join(', ')})`);
-    process.exit(1);
-  }
+  if (!allowed.includes(value)) fail(`--${flag} 값이 올바르지 않습니다: "${value}" (허용: ${allowed.join(', ')})`);
 }
 
-// --flag value 파서(값 없는 플래그 없음)
+// --flag value 파서(값 없는 플래그 없음). 값 자리가 비었거나 다음 플래그(--…)가 오면 값이 빠진 것이다 —
+// 예전에는 `--due --memo x`에서 due가 "--memo"가 됐다. 빈 문자열("")은 값으로 받는다(edit에서 지우기).
 function parseFlags(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
     if (argv[i].startsWith('--')) {
-      out[argv[i].slice(2)] = argv[i + 1];
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith('--')) fail(`${argv[i]}에 값이 없습니다.`, `값을 바로 뒤에 적으세요(예: ${argv[i]} "<값>"). 값을 지우려면 ${argv[i]} ""`);
+      out[argv[i].slice(2)] = value;
       i++;
     }
   }
   return out;
+}
+
+// ── 원장 규칙(불변식) ──────────────────────────────────────
+// YYYY-MM-DD 모양이면서 달력에 있는 날짜인가(2026-02-30 거부).
+function isRealDate(value) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? ''));
+  if (!m) return false;
+  const [y, mo, d] = m.slice(1).map(Number);
+  const date = new Date(Date.UTC(y, mo - 1, d));
+  return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d;
+}
+const isBlank = (value) => value === undefined || value === null || String(value).trim() === '';
+const PLANNING_FIX = 'Planning은 예정일이 있는 할일이다. 날짜가 있으면 --due YYYY-MM-DD, 날짜 없이 바로 할 일이면 --action next, 조건을 기다리면 --action waiting --wait "<트리거>"';
+const WAITING_FIX = 'Waiting은 기다리는 대상이 있는 할일이다. --wait "<기다리는 할일 ID·사람·조건>"을 적거나, 바로 할 일이면 --action next';
+// 할일 하나의 규칙 위반(사람이 읽을 이유 목록). 빈 배열이면 규칙에 맞다.
+function problemsOf(t) {
+  const out = [];
+  if (!ACTION_KEYS.includes(t.action)) out.push(`알 수 없는 행동 "${t.action}" — 원장 표에 나오지 않는다 (허용: ${ACTION_KEYS.join(', ')})`);
+  if (t.action === 'planning' && !isRealDate(t.due)) out.push(isBlank(t.due) ? 'Planning인데 예정일(--due)이 없다' : `Planning의 예정일 "${t.due}"이(가) 실제 날짜가 아니다`);
+  else if (!isBlank(t.due) && !isRealDate(t.due)) out.push(`예정일 "${t.due}"이(가) YYYY-MM-DD의 실제 날짜가 아니다`);
+  if (t.action === 'waiting' && isBlank(t.wait)) out.push('Waiting인데 기다리는 대상(--wait)이 없다');
+  return out;
+}
+function fixHint(t) {
+  if (t.action === 'planning') return PLANNING_FIX;
+  if (t.action === 'waiting') return WAITING_FIX;
+  return '--due는 YYYY-MM-DD의 실제 날짜로 적는다(예: --due 2026-10-15)';
+}
+// add·edit가 쓰기 전에 부른다 — 어긋나면 원장을 건드리지 않고 끝낸다.
+function assertValid(t, verb) {
+  const problems = problemsOf(t);
+  if (problems.length) fail(`${verb} 거부: ${problems.join(' / ')}`, `고치는 법: ${fixHint(t)}`);
+}
+// 열린 할일 가운데 규칙을 어긴 것(이미 어긋난 원장을 드러내는 용도).
+function violationsOf(db) {
+  return db.open.map((t) => ({ t, problems: problemsOf(t) })).filter((v) => v.problems.length);
+}
+function violationLines(violations) {
+  return violations.map(({ t, problems }) => `  ${t.id} ${t.title} — ${problems.join(' / ')}`);
 }
 
 // 백틱 코드 표시 밖의 <, > 만 HTML 엔티티로 바꾼다. 옵시디언이 맨몸 <무언가>를 태그로
@@ -273,7 +326,11 @@ function reviewText(db) {
   const overdue = db.open.filter((x) => x.action === 'planning' && x.due && x.due < t);
   const dueToday = db.open.filter((x) => x.action === 'planning' && x.due === t);
   const waiting = db.open.filter((x) => x.action === 'waiting');
-  const L = [`=== 할일 리뷰 (${t}) ===`];
+  const violations = violationsOf(db);
+  // 위반이 있으면 첫 줄로 알린다(훅·사람이 첫 줄만 봐도 알 수 있게). 원장은 고치지 않는다.
+  const L = violations.length ? [`⚠ 원장 규칙 위반 ${violations.length}건 — 버킷을 사람이 정해 edit로 고친다(자세히: node scripts/tasks.mjs check)`] : [];
+  L.push(`=== 할일 리뷰 (${t}) ===`);
+  if (violations.length) L.push(`\n[규칙 위반] ${violations.length}건`, ...violationLines(violations));
   const dump = (label, arr) => {
     if (!arr.length) return;
     L.push(`\n[${label}] ${arr.length}건`);
@@ -283,7 +340,7 @@ function reviewText(db) {
   dump('오늘 예정', dueToday);
   dump('Next Action', nexts);
   dump('Waiting', waiting);
-  if (!overdue.length && !dueToday.length && !nexts.length && !waiting.length) L.push('열린 급한 할일 없음.');
+  if (!overdue.length && !dueToday.length && !nexts.length && !waiting.length && !violations.length) L.push('열린 급한 할일 없음.');
   return L.join('\n');
 }
 
@@ -292,102 +349,151 @@ function reviewText(db) {
 // 잠금 안에서 한 번에 수행한다 — Claude·Codex가 동시에 실행해도 기록이 사라지거나
 // 파생 뷰(tasks.md·미러)가 방금 persist한 db보다 오래된 것으로 덮어써지지 않는다(R04).
 // list는 원장을 바꾸지 않으므로 잠금 밖에서 그대로 읽는다.
+// ── 명령 ──────────────────────────────────────────────
+// 원장을 바꾸는 명령(add/done/drop/edit/init/review)은 load→mutate→원장 쓰기→render까지
+// 잠금 안에서 한 번에 수행한다 — Claude·Codex가 동시에 실행해도 기록이 사라지거나
+// 파생 뷰(tasks.md·미러)가 방금 persist한 db보다 오래된 것으로 덮어써지지 않는다(R04).
+// list·check는 원장을 바꾸지 않으므로 잠금 밖에서 그대로 읽는다.
+// 인자·규칙 검사는 잠금을 잡기 전에 한다 — 거부된 명령이 잠금을 잡았다 놓는 일도 없게.
 const [cmd, ...rest] = process.argv.slice(2);
 const OWNER_KEYS = Object.keys(OWNER);
 const URG_KEYS = Object.keys(URG);
 const IMP_KEYS = Object.keys(IMP);
 const ACTION_KEYS = BUCKETS.map((b) => b.key);
+const EDIT_KEYS = ['title', 'owner', 'action', 'urgency', 'importance', 'source', 'due', 'wait', 'memo'];
 
-if (cmd === 'add') {
-  const title = rest[0];
-  const f = parseFlags(rest.slice(1));
-  if (!title || !f.owner || !f.action || !f.urgency || !f.source) {
-    console.error('필수: "<제목>" --owner --action --urgency --source');
-    process.exit(1);
+function findOpen(db, id) {
+  const t = db.open.find((x) => x.id === id);
+  if (!t) fail(`없음: ${id} — 열린 할일 ID를 확인하세요(node scripts/tasks.mjs list).`);
+  return t;
+}
+// edit 결과: 플래그를 덮어쓴 할일. 버킷을 옮기면서 그 버킷 전용 칸을 따로 주지 않았으면 비운다
+// (Planning을 떠나면 예정일, Waiting을 떠나면 대기 이유) — 남겨 두면 다른 버킷 표·리뷰에 엉뚱하게 남는다.
+// --due ""·--wait ""는 지우기다(Planning·Waiting이면 위 규칙에 걸려 거부된다).
+function edited(t, f) {
+  const next = { ...t };
+  for (const k of EDIT_KEYS) if (f[k] !== undefined) next[k] = f[k];
+  if (f.action !== undefined && f.action !== t.action) {
+    if (t.action === 'planning' && f.due === undefined) next.due = null;
+    if (t.action === 'waiting' && f.wait === undefined) next.wait = null;
   }
-  validateEnum('owner', f.owner, OWNER_KEYS);
-  validateEnum('action', f.action, ACTION_KEYS);
-  validateEnum('urgency', f.urgency, URG_KEYS);
-  if (f.importance) validateEnum('importance', f.importance, IMP_KEYS);
-  withLock(DATA, () => {
-    const db = load();
-    const id = `T-${slugify(title)}-${stamp()}`;
-    db.open.push({
-      id, title, owner: f.owner, action: f.action, urgency: f.urgency,
+  for (const k of ['due', 'wait', 'importance']) if (next[k] === '') next[k] = null;
+  return next;
+}
+
+function main() {
+  if (cmd === 'add') {
+    const title = rest[0];
+    const f = parseFlags(rest.slice(1));
+    if (!title || !f.owner || !f.action || !f.urgency || !f.source) fail('필수: "<제목>" --owner --action --urgency --source');
+    validateEnum('owner', f.owner, OWNER_KEYS);
+    validateEnum('action', f.action, ACTION_KEYS);
+    validateEnum('urgency', f.urgency, URG_KEYS);
+    if (f.importance) validateEnum('importance', f.importance, IMP_KEYS);
+    const task = {
+      title, owner: f.owner, action: f.action, urgency: f.urgency,
       importance: f.importance || null, // 선택 필드(긴급과 별개 축)
       source: f.source, created: today(),
       due: f.due || null, wait: f.wait || null, memo: f.memo || '',
+    };
+    assertValid(task, 'add');
+    withLock(DATA, () => {
+      const db = load();
+      const id = `T-${slugify(title)}-${stamp()}`;
+      db.open.push({ id, ...task });
+      persistData(db);
+      render(db);
+      console.log(`추가됨 ${id} [${f.action}] ${title}`);
     });
-    persistData(db);
-    render(db);
-    console.log(`추가됨 ${id} [${f.action}] ${title}`);
-  });
-} else if (cmd === 'done') {
-  const id = rest[0];
-  withLock(DATA, () => {
-    const db = load();
-    const i = db.open.findIndex((t) => t.id === id);
-    if (i < 0) { console.error(`없음: ${id}`); process.exit(1); }
-    const t = db.open.splice(i, 1)[0];
-    t.doneAt = today();
-    db.done.push(t);
-    persistData(db);
-    render(db);
-    console.log(`완료 ${id} ${t.title}`);
-  });
-} else if (cmd === 'drop') {
-  const id = rest[0];
-  const f = parseFlags(rest.slice(1));
-  // 이유 없는 취소는 나중에 "왜 안 했지?"를 되짚을 수 없다 — 필수로 받는다.
-  if (!id || !f.reason) {
-    console.error('필수: drop <id> --reason "<이유>"');
-    process.exit(1);
+  } else if (cmd === 'done') {
+    const id = rest[0];
+    if (!id) fail('필수: done <id>');
+    findOpen(load(), id);
+    withLock(DATA, () => {
+      const db = load();
+      const t = findOpen(db, id);
+      db.open.splice(db.open.indexOf(t), 1);
+      t.doneAt = today();
+      db.done.push(t);
+      persistData(db);
+      render(db);
+      console.log(`완료 ${id} ${t.title}`);
+    });
+  } else if (cmd === 'drop') {
+    const id = rest[0];
+    const f = parseFlags(rest.slice(1));
+    // 이유 없는 취소는 나중에 "왜 안 했지?"를 되짚을 수 없다 — 필수로 받는다.
+    if (!id || isBlank(f.reason)) fail('필수: drop <id> --reason "<이유>"');
+    findOpen(load(), id);
+    withLock(DATA, () => {
+      const db = load();
+      const t = findOpen(db, id);
+      db.open.splice(db.open.indexOf(t), 1);
+      t.droppedAt = today();
+      t.reason = f.reason;
+      db.dropped.push(t);
+      persistData(db);
+      render(db);
+      console.log(`취소 ${id} ${t.title} — ${f.reason}`);
+    });
+  } else if (cmd === 'edit') {
+    const id = rest[0];
+    if (!id || id.startsWith('--')) fail('필수: edit <id> --key value ... (id가 먼저 온다)');
+    const f = parseFlags(rest.slice(1));
+    if (f.owner !== undefined) validateEnum('owner', f.owner, OWNER_KEYS);
+    if (f.action !== undefined) validateEnum('action', f.action, ACTION_KEYS);
+    if (f.urgency !== undefined) validateEnum('urgency', f.urgency, URG_KEYS);
+    if (f.importance !== undefined && f.importance !== '') validateEnum('importance', f.importance, IMP_KEYS);
+    if (f.title !== undefined && isBlank(f.title)) fail('--title은 비울 수 없습니다.');
+    // 바뀐 뒤의 할일로 검사한다(잠금 전). 잠금 안에서 다시 읽어 한 번 더 검사한다 — 그사이 다른 세션이 바꿨을 수 있다.
+    assertValid(edited(findOpen(load(), id), f), 'edit');
+    withLock(DATA, () => {
+      const db = load();
+      const t = findOpen(db, id);
+      const next = edited(t, f);
+      assertValid(next, 'edit');
+      Object.assign(t, next);
+      persistData(db);
+      render(db);
+      console.log(`수정 ${id}`);
+    });
+  } else if (cmd === 'init') {
+    // 빈 원장을 실제 파일로 만든다({{DOCS_DIR}}/tasks.json·tasks.md·미러). 이미 있으면 그대로 다시 써 idempotent.
+    withLock(DATA, () => {
+      const db = load();
+      persistData(db);
+      render(db);
+    });
+    console.log('원장 초기화 — {{DOCS_DIR}}/tasks.json·tasks.md 생성(할일 없으면 빈 원장).');
+  } else if (cmd === 'list') {
+    console.log(reviewText(load()));
+  } else if (cmd === 'review') {
+    withLock(DATA, () => {
+      const db = load();
+      render(db);
+      console.log(reviewText(db));
+    });
+  } else if (cmd === 'check') {
+    // 원장 전체의 규칙 검사(읽기만). 훅·CI가 종료 코드로 쓸 수 있다: 위반 없으면 0, 있으면 1.
+    const violations = violationsOf(load());
+    if (!violations.length) {
+      console.log('원장 규칙 위반 없음.');
+      return 0;
+    }
+    console.log(`원장 규칙 위반 ${violations.length}건 — 원장은 고치지 않았다. 버킷을 정해 edit로 고친다:`);
+    console.log(violationLines(violations).join('\n'));
+    console.log(`  고치는 법: ${PLANNING_FIX}\n           ${WAITING_FIX}`);
+    return 1;
+  } else {
+    console.log('명령: init | add | done <id> | drop <id> --reason | edit <id> | list | review | check');
   }
-  withLock(DATA, () => {
-    const db = load();
-    const i = db.open.findIndex((t) => t.id === id);
-    if (i < 0) { console.error(`없음: ${id}`); process.exit(1); }
-    const t = db.open.splice(i, 1)[0];
-    t.droppedAt = today();
-    t.reason = f.reason;
-    db.dropped.push(t);
-    persistData(db);
-    render(db);
-    console.log(`취소 ${id} ${t.title} — ${f.reason}`);
-  });
-} else if (cmd === 'edit') {
-  const id = rest[0];
-  const f = parseFlags(rest.slice(1));
-  if (f.owner !== undefined) validateEnum('owner', f.owner, OWNER_KEYS);
-  if (f.action !== undefined) validateEnum('action', f.action, ACTION_KEYS);
-  if (f.urgency !== undefined) validateEnum('urgency', f.urgency, URG_KEYS);
-  if (f.importance !== undefined) validateEnum('importance', f.importance, IMP_KEYS);
-  withLock(DATA, () => {
-    const db = load();
-    const t = db.open.find((x) => x.id === id);
-    if (!t) { console.error(`없음: ${id}`); process.exit(1); }
-    for (const k of ['title', 'owner', 'action', 'urgency', 'importance', 'source', 'due', 'wait', 'memo'])
-      if (f[k] !== undefined) t[k] = f[k];
-    persistData(db);
-    render(db);
-    console.log(`수정 ${id}`);
-  });
-} else if (cmd === 'init') {
-  // 빈 원장을 실제 파일로 만든다({{DOCS_DIR}}/tasks.json·tasks.md·미러). 이미 있으면 그대로 다시 써 idempotent.
-  withLock(DATA, () => {
-    const db = load();
-    persistData(db);
-    render(db);
-  });
-  console.log('원장 초기화 — {{DOCS_DIR}}/tasks.json·tasks.md 생성(할일 없으면 빈 원장).');
-} else if (cmd === 'list') {
-  console.log(reviewText(load()));
-} else if (cmd === 'review') {
-  withLock(DATA, () => {
-    const db = load();
-    render(db);
-    console.log(reviewText(db));
-  });
-} else {
-  console.log('명령: init | add | done <id> | drop <id> --reason | edit <id> | list | review');
+  return 0;
+}
+
+try {
+  process.exitCode = main();
+} catch (error) {
+  if (!(error instanceof TaskError)) throw error;
+  console.error(error.message);
+  process.exitCode = 1;
 }

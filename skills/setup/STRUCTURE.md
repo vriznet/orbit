@@ -58,7 +58,7 @@
 | `memory.mjs` | 기억 CLI: `search`(ADR·위키·worklog·대화 사본·도구 활동, 번호 목록), `show <번호>`, `forget <문구> [--apply]`(/forget 스킬이 부름). |
 | `redact.mjs` | 기억 파일에 넣기 전 알려진 모양의 비밀값을 가린다. |
 | `code.mjs` | 코드 개요·펼치기(`outline`/`unfold`). tree-sitter WASM은 설치 때 `~/.cache/orbit/code-tools/`에 받는다. |
-| `tasks.mjs` | GTD 할일 원장 CLI(add/list/review/done/drop/edit). ID는 `T-슬러그-YYMMDD-HHMMSS`. `drop <id> --reason`은 이유가 사라진 할일을 완료와 구분해 취소 아카이브로 보낸다. |
+| `tasks.mjs` | GTD 할일 원장 CLI(add/list/review/done/drop/edit/check). ID는 `T-슬러그-YYMMDD-HHMMSS`. `drop <id> --reason`은 이유가 사라진 할일을 완료와 구분해 취소 아카이브로 보낸다. 원장 규칙(Planning⇒실제 날짜 `--due`, Waiting⇒`--wait`, `--due` 날짜 형식)을 add·edit가 잠금 전에 강제하고, 이미 어긋난 원장은 review·list 첫 줄과 `check`(위반 시 종료 코드 1)로 드러낸다. |
 | `wiki.mjs` | 위키 노트 CRUD(new/list/show/set/rename/rm). |
 | `wiki-lib.mjs` | 위키 공통 라이브러리(파싱·프론트매터 등). |
 | `wiki-links.mjs` | 위키 링크·스키마 검사기(`wiki:check`), 안전한 자동 연결. |

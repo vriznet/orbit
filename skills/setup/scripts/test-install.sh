@@ -2157,6 +2157,68 @@ S67_OUT="$(cd "$R67" && R67B="$R67B" R67C="$R67C" R67D="$R67D" node "$WORK/scena
 echo "${S67_OUT}"
 [ "${S67_RC}" = "0" ] || fail "시나리오 67 하위 항목 실패(위 ❌ 확인)"
 
+echo "== 시나리오 68: 할일 원장 규칙을 스크립트가 강제 — Planning⇒예정일, Waiting⇒대기 대상, 날짜 형식, 값 빠진 플래그, 잠금 남김 없음(0.2.10) =="
+R68="$WORK/scenario68"
+new_repo "$R68"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R68" --project-name "Scenario68" --slug scenario68 --mode new >/dev/null 2>&1
+(cd "$R68" && node scripts/tasks.mjs init >/dev/null 2>&1)
+cat > "$WORK/scenario68.cjs" <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd();
+const DATA = path.join(ROOT, 'scenario68-docs', 'tasks.json');
+const LOCK = `${DATA}.lock`;
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const run = (...args) => spawnSync(process.execPath, ['scripts/tasks.mjs', ...args], { encoding: 'utf8' });
+const bytes = () => fs.readFileSync(DATA);
+const base = ['--owner', 'human', '--urgency', 'med', '--source', '시험'];
+// 거부돼야 하는 명령: 0이 아닌 종료, 원장 바이트 그대로, 잠금 디렉터리 없음
+const rejects = (label, args, needle) => {
+  const before = bytes();
+  const r = run(...args);
+  ok(r.status !== 0 && bytes().equals(before) && !fs.existsSync(LOCK) && (!needle || r.stderr.includes(needle)), `${label} → 거부·원장 그대로·잠금 없음 (rc=${r.status})`);
+};
+rejects('add planning, --due 없음', ['add', '일정', '--action', 'planning', ...base], '--action next');
+rejects('add planning, 없는 날짜 2026-02-30', ['add', '일정', '--action', 'planning', '--due', '2026-02-30', ...base], '실제 날짜');
+rejects('add waiting, --wait 없음', ['add', '대기', '--action', 'waiting', ...base], '--wait');
+rejects('add next, 잘못된 --due 2026-13-01', ['add', '다음', '--action', 'next', '--due', '2026-13-01', ...base], 'YYYY-MM-DD');
+rejects('값 빠진 플래그 --due --memo x', ['add', '다음', '--action', 'next', '--due', '--memo', 'x', ...base], '--due에 값이 없습니다');
+const okAdd = run('add', '일정', '--action', 'planning', '--due', '2026-10-15', ...base);
+ok(okAdd.status === 0, 'add planning --due 2026-10-15 → 성공');
+ok(run('add', '결정', '--action', 'next', ...base).status === 0, 'add next(예정일 없음) → 성공');
+const open = () => JSON.parse(fs.readFileSync(DATA, 'utf8')).open;
+const P = open().find((t) => t.action === 'planning').id;
+const N = open().find((t) => t.action === 'next').id;
+rejects('edit <next> --action planning(예정일 없음)', ['edit', N, '--action', 'planning'], '예정일');
+rejects('edit <planning> --due ""', ['edit', P, '--due', ''], '예정일');
+rejects('edit id 없이', ['edit', '--action', 'next'], 'edit <id>');
+rejects('edit 없는 id', ['edit', 'T-없음', '--memo', 'x'], '없음');
+rejects('done id 없이', ['done'], 'done <id>');
+const moved = run('edit', P, '--action', 'next');
+const after = open().find((t) => t.id === P);
+ok(moved.status === 0 && after.action === 'next' && after.due === null, 'edit <planning> --action next → 성공, 남은 예정일은 비움');
+ok(run('edit', N, '--action', 'planning', '--due', '2026-11-01').status === 0, 'edit <next> --action planning --due 2026-11-01 → 성공');
+ok(run('check').status === 0, 'check: 위반 없으면 종료 코드 0');
+// 이미 어긋난 원장: 고치지 않고 드러낸다
+const db = JSON.parse(fs.readFileSync(DATA, 'utf8'));
+db.open.push({ id: 'T-예정일-없는-계획', title: '예정일 없는 계획', owner: 'ai', action: 'planning', urgency: 'med', importance: null, source: '손편집', created: '2026-10-01', due: null, wait: null, memo: '' });
+db.open.push({ id: 'T-대기-이유-없음', title: '대기 이유 없음', owner: 'human', action: 'waiting', urgency: 'low', importance: null, source: '손편집', created: '2026-10-01', due: null, wait: '', memo: '' });
+fs.writeFileSync(DATA, JSON.stringify(db, null, 2) + '\n');
+const broken = bytes();
+const chk = run('check');
+ok(chk.status === 1 && chk.stdout.includes('T-예정일-없는-계획') && chk.stdout.includes('T-대기-이유-없음') && bytes().equals(broken), 'check: 위반을 이름과 함께 보여 주고 종료 코드 1, 원장 그대로');
+const rev = run('review');
+ok(rev.status === 0 && /^⚠ 원장 규칙 위반 2건/.test(rev.stdout) && rev.stdout.includes('T-예정일-없는-계획') && bytes().equals(broken) && !fs.existsSync(LOCK), 'review: 첫 줄에 위반 수, 위반 목록, 원장 그대로');
+ok(/^⚠ 원장 규칙 위반 2건/.test(run('list').stdout), 'list: 첫 줄에 위반 수');
+// 손상된 원장: 잠금 안에서 실패해도 잠금을 남기지 않는다
+fs.writeFileSync(DATA, '{깨짐');
+const bad = run('review');
+ok(bad.status === 1 && bad.stderr.includes('파싱 실패') && !fs.existsSync(LOCK), '손상된 원장으로 review → 실패, 잠금 없음');
+process.exit(failed ? 1 : 0);
+NODE
+S68_OUT="$(cd "$R68" && node "$WORK/scenario68.cjs")"; S68_RC=$?
+echo "${S68_OUT}"
+[ "${S68_RC}" = "0" ] || fail "시나리오 68 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0
