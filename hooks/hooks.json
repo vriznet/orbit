@@ -1,5 +1,5 @@
 {
-  "description": "orbit 에이전트 정책 — 위임 타입을 orbit 접근 모드로 유도한다",
+  "description": "orbit 에이전트 정책 — ORBIT_AGENT_POLICY=on일 때만 위임 타입을 orbit 접근 모드로 유도한다(기본 꺼짐)",
   "hooks": {
     "PreToolUse": [
       {

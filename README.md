@@ -63,7 +63,7 @@ Claude Code 같은 실행 환경(*에이전트 하네스*)이 AI에게 손발을
 
 ### 정책 훅
 
-orbit이 설치된 저장소(`.claude/orbit-manifest.json`이 있는 저장소)에서는 `general-purpose`와 `fork` 위임을 PreToolUse 훅이 거부하고 위 모드로 유도한다. 다른 프로젝트의 위임에는 끼어들지 않는다. 기능을 끄려면 환경변수 `ORBIT_AGENT_POLICY=off`.
+기본은 꺼져 있다. 환경변수 `ORBIT_AGENT_POLICY=on`으로 켜면, orbit이 설치된 저장소(`.claude/orbit-manifest.json`이 있는 저장소)에서 `general-purpose`와 `fork` 위임을 PreToolUse 훅이 거부하고 위 모드로 유도한다. 다른 프로젝트의 위임에는 끼어들지 않는다. 켜 두면 위임이 orbit 모드로만 쏠려 리뷰어 같은 전용 에이전트가 쓰이지 않는 일이 있어 0.2.12부터 기본을 껐다.
 
 ## 기억이 남는 곳
 

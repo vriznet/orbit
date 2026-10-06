@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // orbit 에이전트 정책 훅 — Agent/Task 도구 호출을 검사해 위임 타입을 orbit 모드로 유도한다.
 //
-// 규칙:
+// 기본은 꺼짐이다. ORBIT_AGENT_POLICY=on 으로 켰을 때만 아래 규칙으로 판단한다(0.2.12부터 —
+// 켜 두면 위임이 orbit 모드, 특히 클린 모드로만 쏠리고 리뷰어 같은 전용 에이전트가 쓰이지 않았다).
+//
+// 규칙(켰을 때):
 // - orbit이 설치된 저장소(.claude/orbit-manifest.json이 있는 저장소)에서만 판단한다. 플러그인 훅은
 //   설치한 사람의 모든 프로젝트에서 돌기 때문에, 다른 프로젝트의 위임에는 끼어들지 않는다.
 // - general-purpose(타입 생략 시 기본)와 fork는 거부하고, 사유를 Claude에게 돌려준다 → Claude가 orbit 모드로 재시도한다.
 // - orbit:* , Explore, Plan, claude, 그 외 알려지지 않은 타입은 그대로 허용한다(거부 목록 방식 — 오탐을 피한다).
-// - ORBIT_AGENT_POLICY=off 이면 아무 판단도 하지 않는다(탈출구).
 // - 훅은 절대 세션을 깨뜨리지 않는다: 어떤 오류가 나도 조용히 허용하고 exit 0.
 
 import fs from 'node:fs';
@@ -33,7 +35,7 @@ let raw = '';
 process.stdin.on('data', (c) => (raw += c));
 process.stdin.on('end', () => {
   try {
-    if ((process.env.ORBIT_AGENT_POLICY || '').toLowerCase() === 'off') return;
+    if (!['on', '1', 'true'].includes((process.env.ORBIT_AGENT_POLICY || '').toLowerCase())) return;
     const input = JSON.parse(raw || '{}');
     const toolName = input.tool_name || '';
     if (toolName !== 'Agent' && toolName !== 'Task') return;

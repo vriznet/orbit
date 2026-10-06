@@ -997,7 +997,7 @@ echo "${S41_OUT}"
 [ "${S41_RC}" = "0" ] || fail "시나리오 41 하위 항목 실패(위 ❌ 확인)"
 
 echo ""
-echo "== 시나리오 43: 에이전트 정책 훅은 orbit 설치 저장소에서만 =="
+echo "== 시나리오 43: 에이전트 정책 훅은 기본 꺼짐, 켜면 orbit 설치 저장소에서만(0.2.12) =="
 POLICY43="$SKILL_DIR/../../hooks/agent-policy.mjs"
 R43="$WORK/scenario43"; P43="$WORK/plain43"
 mkdir -p "$R43/.claude" "$R43/sub" "$P43" && git -C "$R43" init -q && git -C "$P43" init -q
@@ -1009,18 +1009,21 @@ J43_FORK='{"tool_name":"Agent","cwd":"'"$R43/sub"'","tool_input":{"subagent_type
 J43_PLAIN='{"tool_name":"Agent","cwd":"'"$P43"'","tool_input":{}}'
 J43_PLAIN_GP='{"tool_name":"Agent","cwd":"'"$P43"'","tool_input":{"subagent_type":"general-purpose"}}'
 J43_MODE='{"tool_name":"Agent","cwd":"'"$R43"'","tool_input":{"subagent_type":"orbit:clean-subagent"}}'
-OUT43_OMIT="$(policy43 "" "$J43_OMIT")"
-OUT43_FORK="$(policy43 "" "$J43_FORK")"
-OUT43_PLAIN="$(policy43 "" "$J43_PLAIN")"
-OUT43_PLAIN_GP="$(policy43 "CLAUDE_PROJECT_DIR=$P43" "$J43_PLAIN_GP")"
-OUT43_MODE="$(policy43 "" "$J43_MODE")"
+OUT43_OMIT="$(policy43 "ORBIT_AGENT_POLICY=on" "$J43_OMIT")"
+OUT43_FORK="$(policy43 "ORBIT_AGENT_POLICY=on" "$J43_FORK")"
+OUT43_PLAIN="$(policy43 "ORBIT_AGENT_POLICY=on" "$J43_PLAIN")"
+OUT43_PLAIN_GP="$(policy43 "ORBIT_AGENT_POLICY=on CLAUDE_PROJECT_DIR=$P43" "$J43_PLAIN_GP")"
+OUT43_MODE="$(policy43 "ORBIT_AGENT_POLICY=on" "$J43_MODE")"
 OUT43_OFF="$(policy43 "ORBIT_AGENT_POLICY=off" "$J43_OMIT")"
+OUT43_DEFAULT="$(printf '%s' "$J43_OMIT" | env -u CLAUDE_PROJECT_DIR -u ORBIT_AGENT_POLICY node "$POLICY43" 2>/dev/null)"
+OUT43_DEFAULT_FORK="$(printf '%s' "$J43_FORK" | env -u CLAUDE_PROJECT_DIR -u ORBIT_AGENT_POLICY node "$POLICY43" 2>/dev/null)"
 echo "$OUT43_OMIT" | grep -q '"permissionDecision":"deny"' && pass "orbit 저장소: 타입 생략 거부" || fail "orbit 저장소에서 타입 생략을 허용함"
 echo "$OUT43_FORK" | grep -q '"permissionDecision":"deny"' && pass "orbit 저장소 하위 폴더: fork 거부" || fail "하위 폴더에서 fork를 허용함"
 [ -z "$OUT43_PLAIN" ] && pass "orbit 없는 저장소: 간섭 안 함" || fail "orbit 없는 저장소에서 거부함"
 [ -z "$OUT43_PLAIN_GP" ] && pass "orbit 없는 프로젝트 폴더: 간섭 안 함" || fail "orbit 없는 프로젝트 폴더에서 거부함"
 [ -z "$OUT43_MODE" ] && pass "orbit 모드는 허용" || fail "orbit 모드를 거부함"
-[ -z "$OUT43_OFF" ] && pass "ORBIT_AGENT_POLICY=off 탈출구" || fail "끄기가 동작하지 않음"
+[ -z "$OUT43_OFF" ] && pass "ORBIT_AGENT_POLICY=off면 판단 안 함" || fail "끄기가 동작하지 않음"
+[ -z "$OUT43_DEFAULT" ] && [ -z "$OUT43_DEFAULT_FORK" ] && pass "기본(환경변수 없음)은 꺼짐 — 타입 생략·fork도 막지 않음" || fail "기본값에서 위임을 거부함"
 
 echo ""
 echo "== 시나리오 44: recent — 앞 구간 요약·알림 묶음 제외·머리글 =="
