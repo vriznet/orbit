@@ -2293,6 +2293,52 @@ S69_OUT="$(cd "$R69" && node "$WORK/scenario69.cjs")"; S69_RC=$?
 echo "${S69_OUT}"
 [ "${S69_RC}" = "0" ] || fail "시나리오 69 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 70: 설정 보기·바꾸기(config.mjs show·set·unset, /orbit:config)(0.2.14) =="
+R70="$WORK/scenario70"
+new_repo "$R70"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R70" --project-name "Scenario70" --slug scenario70 --mode new >/dev/null 2>&1
+[ -f "$SKILL_DIR/../config/SKILL.md" ] && grep -q 'config.mjs" show' "$SKILL_DIR/../config/SKILL.md" && pass "config 스킬이 config.mjs를 부름" || fail "config 스킬 없음"
+cat > "$WORK/scenario70.cjs" <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const CONFIG = process.argv[2];
+const run = (...args) => spawnSync(process.execPath, [CONFIG, ...args], { encoding: 'utf8' });
+const LOCAL = '.claude/settings.local.json';
+const show = () => JSON.parse(run('show', '--repo', '.', '--json').stdout);
+const sw = (name) => show().switches.find((s) => s.name === name);
+const first = show();
+ok(first.slug === 'scenario70' && first.modules.find((m) => m.name === 'codex').value === 'off' && sw('found-min-tools').value === '10' && sw('found-min-tools').from === '기본값', 'show: 모듈·스위치의 기본값과 출처');
+ok(run('show', '--repo', '.').stdout.includes('## 조절 스위치') && !fs.existsSync(LOCAL), 'show는 파일을 만들지 않음');
+fs.writeFileSync(LOCAL, JSON.stringify({ permissions: { allow: ['Bash(ls:*)'] }, env: { OTHER: 'keep' } }, null, 2));
+const set = run('set', '--repo', '.', 'found-min-tools', '25');
+const local = () => JSON.parse(fs.readFileSync(LOCAL, 'utf8'));
+ok(set.status === 0 && local().env.ORBIT_FOUND_MIN_TOOLS === '25' && local().env.OTHER === 'keep' && local().permissions.allow[0] === 'Bash(ls:*)', 'set: env에 적고 파일의 다른 내용은 그대로');
+ok(sw('found-min-tools').value === '25' && sw('found-min-tools').from === LOCAL, 'show에 바뀐 값과 출처');
+ok(run('set', '--repo', '.', 'agent-policy', 'ON').status === 0 && local().env.ORBIT_AGENT_POLICY === 'on', 'on/off 값은 소문자로 맞춤');
+ok(run('set', '--repo', '.', 'ORBIT_COMPACT_WORKLOG', 'off').status === 0 && local().env.ORBIT_COMPACT_WORKLOG === 'off', '환경변수 이름으로도 받음');
+const before = fs.readFileSync(LOCAL, 'utf8');
+ok(run('set', '--repo', '.', 'found-min-tools', '많이').status === 1 && run('set', '--repo', '.', 'agent-policy', 'maybe').status === 1 && fs.readFileSync(LOCAL, 'utf8') === before, '틀린 값은 거부하고 파일 그대로');
+ok(run('unset', '--repo', '.', 'found-min-tools').status === 0 && !('ORBIT_FOUND_MIN_TOOLS' in local().env) && sw('found-min-tools').value === '10', 'unset: 줄을 지워 기본값으로');
+if (!fs.existsSync(path.join(path.dirname(CONFIG), 'config-ext.mjs'))) {
+  const unknown = run('set', '--repo', '.', 'mirror', 'on');
+  ok(unknown.status === 2 && unknown.stderr.includes('모르는 설정') && unknown.stderr.includes('compact-worklog'), '모르는 이름은 거부하고 바꿀 수 있는 이름을 알림');
+  ok(run('set', '--repo', '.', 'nudge', 'off').status === 2, '확장이 없으면 확장 항목 이름도 모르는 설정');
+}
+ok(run('set', '--repo', '.', 'zzz-없는것', 'on').status === 2, '없는 이름 거부');
+ok(run('set', '--repo', '.', 'codex', 'off').status === 2, '모듈 끄기는 지원하지 않음');
+const on = run('set', '--repo', '.', 'codex', 'on');
+ok(on.status === 0 && fs.existsSync('AGENTS.md') && show().modules.find((m) => m.name === 'codex').value === 'on', '모듈 켜기: 설치기 update로 파일 설치·매니페스트 반영');
+ok(run('set', '--repo', '.', 'codex', 'on').stdout.includes('이미 켜져'), '이미 켠 모듈은 그대로');
+fs.writeFileSync(LOCAL, '{깨짐');
+ok(run('set', '--repo', '.', 'found-min-tools', '5').status === 1 && fs.readFileSync(LOCAL, 'utf8') === '{깨짐', '깨진 설정 파일은 덮지 않고 멈춤');
+ok(run('show', '--repo', path.join('..', 'nowhere-70')).status === 1, 'orbit이 없는 곳에서는 거부');
+process.exit(failed ? 1 : 0);
+NODE
+S70_OUT="$(cd "$R70" && node "$WORK/scenario70.cjs" "$SKILL_DIR/scripts/config.mjs")"; S70_RC=$?
+echo "${S70_OUT}"
+[ "${S70_RC}" = "0" ] || fail "시나리오 70 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

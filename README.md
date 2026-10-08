@@ -34,6 +34,8 @@ Claude Code 같은 실행 환경(*에이전트 하네스*)이 AI에게 손발을
 
 갱신은 `/orbit:update` — 질문 없이, 직접 수정한 파일은 보존한 채.
 
+설치한 뒤 설정을 보고 바꾸려면 `/orbit:config`를 쓴다(선택 모듈 켜기, 아래 "조절" 스위치). 스위치는 저장소의 `.claude/settings.local.json`에 적힌다.
+
 기억·결정 스킬은 플러그인에 들어 있어 orbit이 설치된 저장소에서 바로 쓴다: `/orbit:recall`(옛 결정·이유 찾기), `/orbit:forget`(기억 지우기), `/orbit:decision-context`(ADR 맥락 수집), `/orbit:worktree-merge`(병렬 워크트리 병합).
 
 ## 위임 모드 — 접근 축(CLAUDE.md · 스킬 · MCP)
