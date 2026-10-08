@@ -75,6 +75,7 @@ Claude Code 같은 실행 환경(*에이전트 하네스*)이 AI에게 손발을
 | 사용자 선호·설명 수준 등 | Claude Code 자동 기억(MEMORY.md) | orbit은 저장 기준만 안내 |
 
 - 저장 전에 알려진 모양의 비밀값(키·토큰·개인키·주소 속 비밀번호·`PASSWORD=` 등)을 가린다. 모양이 알려지지 않은 비밀값은 남을 수 있다.
+- 찾기: `node scripts/memory.mjs search`와 `/orbit:recall`은 위 문서 원장·대화 글 사본·도구 색인을 찾고, 결과 끝에 찾은 범위(사본이 언제부터인지)를 적는다. 사본이 덮지 않는 대화(orbit 설치 전, 다른 컴퓨터에서 가져온 세션의 앞부분)는 `--source raw`로 Claude Code 원본 세션 기록의 사람 입력·AI 글에서 찾는다. 원본은 orbit이 가려 두지 않은 글이고, Claude Code가 지우면(기본 30일) 찾을 수 없다.
 - 지우기: `/orbit:forget <문구>` — 미리 보기 → 확인 → orbit 사본에서 삭제, 문서 원장은 확인 뒤 현재 파일에서 고친다. git 이력·Claude Code 원본 세션 기록·자동 기억은 orbit이 지우지 못한다.
 - 조절: `ORBIT_COMPACT_WORKLOG=off`(컴팩션 직후 worklog를 넣지 않음 — 효과를 재 보는 용도), `ORBIT_FOUND_MIN_TOOLS`(도구를 이만큼 쓴 턴에 '발견' 칸이 비면 알림, 기본 10, 0이면 끔), `ORBIT_READ_OUTLINE_MIN_LINES`(큰 파일 개요 안내 기준, 기본 300, 0이면 끔), `ORBIT_CODE_TOOLS_DIR`(코드 도구 위치).
 

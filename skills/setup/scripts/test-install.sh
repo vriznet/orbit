@@ -2222,6 +2222,77 @@ S68_OUT="$(cd "$R68" && node "$WORK/scenario68.cjs")"; S68_RC=$?
 echo "${S68_OUT}"
 [ "${S68_RC}" = "0" ] || fail "시나리오 68 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 69: 원본 세션 기록 찾기(--source raw)·찾은 범위 줄·한 글자 낱말과 드문 낱말 순위(0.2.13) =="
+R69="$WORK/scenario69"
+new_repo "$R69"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R69" --project-name "Scenario69" --slug scenario69 --mode new >/dev/null 2>&1
+grep -q 'source raw' "$R69/.claude/agents/recall-searcher.md" && pass "recall-searcher: 원본 세션 기록 찾기 안내" || fail "recall-searcher에 --source raw 안내 없음"
+grep -q '이 컴퓨터에는 없다' "$R69/.claude/agents/recall-searcher.md" && pass "recall-searcher: 없음을 갈라 말하기" || fail "recall-searcher에 없음 구분 없음"
+grep -q '이 컴퓨터에는 없다' "$SKILL_DIR/../recall/SKILL.md" && pass "recall 스킬: 없음을 갈라 말하기" || fail "recall 스킬에 없음 구분 없음"
+cat > "$WORK/scenario69.cjs" <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const projects = path.join(process.cwd(), '..', 'scenario69-claude-projects');
+const dir = path.join(projects, fs.realpathSync(process.cwd()).replace(/[^A-Za-z0-9]/g, '-'));
+fs.mkdirSync(dir, { recursive: true });
+const line = (o) => JSON.stringify(o);
+const human = (text, ts, extra = {}) => line({ type: 'user', timestamp: ts, message: { role: 'user', content: text }, ...extra });
+const ai = (text, ts, extra = {}) => line({ type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'text', text }] }, ...extra });
+const tool = (text, ts) => line({ type: 'user', timestamp: ts, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: text }] } });
+fs.writeFileSync(path.join(dir, 'sessOLD0-1111.jsonl'), [
+  human('고양이 사료는 연어맛으로 정하자. 닭고기맛은 알레르기 때문에 안 돼', '2026-08-01T01:00:00Z'),
+  ai('연어맛으로 정했습니다. API_KEY=abcdef1234567890 은 가립니다.', '2026-08-01T01:00:05Z'),
+  tool('도구출력에만있는낱말 연어맛 연어맛', '2026-08-01T01:00:06Z'),
+  ai('서브에이전트만의말 연어맛', '2026-08-01T01:00:07Z', { isSidechain: true }),
+  human('<task-notification>연어맛 알림</task-notification>', '2026-08-01T01:00:08Z'),
+  human('다음 이야기', '2026-08-02T01:00:00Z'),
+  ai('다음 답', '2026-08-02T01:00:05Z'),
+  human('사본에도 든 강아지 간식 이야기', '2026-09-01T00:10:00Z'),
+  ai('간식 답', '2026-09-01T00:10:05Z'),
+].join('\n') + '\n');
+const mem = path.join('.git', 'orbit-memory'); fs.mkdirSync(mem, { recursive: true });
+const rec = (seq, user, assistant, at, session = 'sessOLD0-1111') => JSON.stringify({ v: 1, at, session, worktree: process.cwd(), seq, user, assistant, files: [], filesEstimated: true, worklog: null });
+const filler = Array.from({ length: 8 }, (_, i) => rec(10 + i, `이 그 안 번 두 한 잡담 ${i}`, '이 그 안 번 두 한 길고 긴 최근 답 '.repeat(20), `2026-09-2${i}T00:00:00Z`, 'sessNEW0-2222'));
+fs.writeFileSync(path.join(mem, 'dialogue.jsonl'), [
+  rec(1, '사본에도 든 강아지 간식 이야기', '간식 답', '2026-09-01T00:10:00Z'),
+  rec(2, '금붕어 어항 필터를 바꿀까?', '이 그 안 번 두 한 — 필터는 그대로 둡니다', '2026-09-02T00:00:00Z'),
+  ...filler,
+].join('\n') + '\n');
+const env = { ...process.env, ORBIT_CLAUDE_PROJECTS_DIR: projects };
+const run = (...args) => spawnSync(process.execPath, ['scripts/memory.mjs', ...args], { encoding: 'utf8', env });
+const base = run('search', '연어맛');
+ok(base.status === 0 && base.stdout.includes('찾은 것이 없습니다') && base.stdout.includes('찾은 범위:') && base.stdout.includes('대화 글 사본은 2026-09-01부터 10턴') && base.stdout.includes('원본 세션 기록은 찾지 않음'), '기본 검색: 원본은 안 찾고, 찾은 범위 줄에 사본 시작 날짜와 안 찾은 곳');
+const raw = run('search', '연어맛 사료', '--source', 'raw');
+const rawLines = raw.stdout.split('\n').filter((l) => /^- \[/.test(l));
+ok(raw.stdout.includes('## 원본 세션 기록') && rawLines.length === 1 && rawLines[0].includes('r:sessOLD0:1 ·') && rawLines[0].includes('사용자: 고양이 사료는 연어맛으로'), '--source raw: 사본에 없는 옛 턴의 사용자 원문을 찾음(도구 출력·서브에이전트·알림은 턴이 아님)');
+ok(raw.stdout.includes('원본 세션 기록은 이 컴퓨터의 세션 1개') && raw.stdout.includes('사본에 이미 든 1턴은 목록에서 뺌'), 'raw 찾은 범위 줄: 세션 수와 사본에 든 턴 수');
+ok(!run('search', '도구출력에만있는낱말', '--source', 'raw').stdout.includes('r:sessOLD0') && !run('search', '서브에이전트만의말', '--source', 'raw').stdout.includes('r:sessOLD0'), 'raw: 도구 출력과 서브에이전트 글은 찾는 대상이 아님');
+ok(!run('search', '강아지 간식', '--source', 'raw').stdout.includes('r:sessOLD0'), 'raw: 사본에 이미 든 턴은 목록에서 뺌');
+const shown = run('show', 'r:sessOLD0:1', '--around').stdout;
+ok(shown.includes('닭고기맛은 알레르기 때문에 안 돼') && shown.includes('1번째 줄') && shown.includes('(뒤 턴)') && shown.includes('다음 이야기'), 'show r:…: 사용자 원문 전체·원본 줄 번호·--around');
+ok(shown.includes('[REDACTED]') && !shown.includes('abcdef1234567890'), 'show r:…: 보여 줄 때 비밀값을 가림');
+ok(run('show', 'r:sessOLD0:999').stdout.includes('원본 세션 기록에 그 턴이 없습니다'), '없는 원본 턴 안내');
+const both = run('search', '연어맛', '--source', 'dialogue,raw');
+ok(both.stdout.includes('r:sessOLD0:1') && both.stdout.includes('r:…(원본 세션 기록)'), '--source dialogue,raw 함께');
+const j = JSON.parse(run('search', '연어맛', '--source', 'raw', '--json').stdout);
+ok(typeof j.coverage === 'string' && j.groups[0].source === 'raw', '--json에 coverage');
+// 순위: 물음 문장을 통째로 넣어도 한 글자 낱말·흔한 낱말 때문에 긴 최근 턴이 앞서지 않는다
+const q = run('search', '그 금붕어 어항 필터, 이 번 에 안 바꾸기로 한 거였나?', '--source', 'dialogue', '--json');
+const jq = JSON.parse(q.stdout);
+ok(jq.terms.includes('필터') && !jq.terms.includes('이') && !jq.terms.includes('그') && !jq.terms.includes('필터,'), '검색어: 문장부호를 떼고 한 글자 낱말을 뺌');
+ok(jq.groups[0].items[0].record.seq === 2, '순위: 드문 낱말이 맞은 옛 턴이 긴 최근 턴보다 앞');
+ok(JSON.parse(run('search', '이 그', '--source', 'dialogue', '--json').stdout).terms.join(' ') === '이 그', '검색어가 모두 한 글자면 그대로 쓴다');
+ok(run('search', '연어맛', '--source', 'zzz').status === 1, '모르는 --source 거부');
+fs.rmSync(projects, { recursive: true, force: true });
+const gone = run('search', '연어맛', '--source', 'raw');
+ok(gone.status === 0 && gone.stdout.includes('원본 세션 기록은 이 컴퓨터에 없음'), '원본 세션 폴더가 없어도 동작하고 그렇게 알림');
+process.exit(failed ? 1 : 0);
+NODE
+S69_OUT="$(cd "$R69" && node "$WORK/scenario69.cjs")"; S69_RC=$?
+echo "${S69_OUT}"
+[ "${S69_RC}" = "0" ] || fail "시나리오 69 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0
