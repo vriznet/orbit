@@ -153,7 +153,7 @@ function signature(value) {
 // 비앵커 위치에 담은 사용자 훅"은 여전히 절대 걸리지 않는다.
 // observe.sh 갈래는 예전 버전이 선택 모듈로 심던 자동 학습 훅이다. 지금은 설치하지 않지만,
 // 남아 있는 배선을 소유로 알아봐야 update가 연결을 정리한다.
-const HARNESS_HANDLER_COMMAND_RE = /^(node "\$CLAUDE_PROJECT_DIR\/scripts\/(worklog|worklog-hook|wiki-hook|memory-hook)\.mjs" |bash "\$CLAUDE_PROJECT_DIR\/\.claude\/skills\/continuous-learning-v2\/hooks\/observe\.sh" )/;
+const HARNESS_HANDLER_COMMAND_RE = /^(node "\$CLAUDE_PROJECT_DIR\/scripts\/(worklog|worklog-hook|wiki-hook|memory-hook|git-guard)\.mjs" |bash "\$CLAUDE_PROJECT_DIR\/\.claude\/skills\/continuous-learning-v2\/hooks\/observe\.sh" )/;
 
 function collectHandlerSignatures(hooksSpec) {
   const signatures = new Set();
@@ -545,10 +545,12 @@ const directAssets = [
   ['scripts/code.mjs', path.join(repo, 'scripts/code.mjs'), null],
   ['scripts/memory-hook.mjs', path.join(repo, 'scripts/memory-hook.mjs'), null],
   ['scripts/claude-catchup.sh', path.join(repo, 'scripts/claude-catchup.sh'), null],
+  ['scripts/git-guard.mjs', path.join(repo, 'scripts/git-guard.mjs'), null],
 ];
 
 if (!options['no-githooks']) {
   directAssets.push(['githooks/commit-msg', path.join(repo, '.githooks/commit-msg'), 'legacy/githooks/commit-msg']);
+  directAssets.push(['githooks/pre-commit', path.join(repo, '.githooks/pre-commit'), null]);
 }
 
 if (options.codex) {

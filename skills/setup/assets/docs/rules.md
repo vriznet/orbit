@@ -103,4 +103,5 @@
 
 - 한국어 커밋 메시지, 명령형.
 - 결정이 담긴 커밋에는 `Decision: <슬러그>` 트레일러를 붙인다(슬러그는 ADR 파일명의 슬러그 부분). `.githooks/commit-msg` 훅이 트레일러는 있는데 `{{DOCS_DIR}}/decisions/` 변경이 없으면 경고한다.
-- 커밋 푸시는 사용자가 명시적으로 요청할 때만.
+- 푸시는 사용자가 그 턴에 시켰을 때만 한다. 시키지 않은 턴의 `git push`는 훅(`scripts/git-guard.mjs`)이 막는다. 막히면 돌아가지 말고 답변에서 알린다.
+- 일지(worklog)만 바뀌었으면 커밋하지 않는다. 다음 작업 커밋에 함께 싣는다. 일지만 담은 커밋은 `.githooks/pre-commit`이 막는다. 사용자가 일지만이라도 커밋하라고 한 턴에만 `ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1`을 붙인다.

@@ -69,6 +69,19 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/git-guard.mjs\" turn-start"
+            ],
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -168,6 +181,20 @@
             "args": [
               "-c",
               "node \"$CLAUDE_PROJECT_DIR/scripts/memory-hook.mjs\" pre-tool"
+            ],
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/git-guard.mjs\" pre-tool"
             ],
             "timeout": 10
           }

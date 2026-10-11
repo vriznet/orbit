@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# harness pre-commit 훅 — 일지만 바뀐 커밋을 막는다.
+# worklog는 턴마다 바뀌어서, 그것만 따로 커밋하면 커밋 기록이 일지로 찬다.
+# 일지는 커밋하지 않은 채로 두고 다음 작업 커밋에 함께 싣는다.
+#
+# 활성화(레포당 1회): git config core.hooksPath .githooks
+# 사용자가 일지만이라도 커밋하라고 했을 때: ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit ...
+
+[ "${ORBIT_ALLOW_WORKLOG_ONLY_COMMIT:-}" = "1" ] && exit 0
+
+# 병합·리베이스·체리픽 중에는 막지 않는다(이미 있는 커밋을 옮기는 일이다).
+for marker in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
+  [ -e "$(git rev-parse --git-path "$marker")" ] && exit 0
+done
+
+staged="$(git -c core.quotePath=false diff --cached --name-only)"
+[ -z "$staged" ] && exit 0
+
+rest="$(printf '%s\n' "$staged" | grep -v -x -e '{{DOCS_DIR}}/worklog.md' -e '{{DOCS_DIR}}/worklog-state.json')"
+[ -n "$rest" ] && exit 0
+
+echo "" >&2
+echo "⛔ harness: 일지(worklog)만 바뀐 커밋은 만들지 않습니다." >&2
+echo "   → 일지는 커밋하지 않은 채로 두고, 다음 작업 커밋에 함께 싣습니다." >&2
+echo "   (사용자가 일지만이라도 커밋하라고 말했다면: ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 을 붙여 다시 실행)" >&2
+echo "" >&2
+exit 1

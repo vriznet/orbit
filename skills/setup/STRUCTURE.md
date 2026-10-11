@@ -63,6 +63,7 @@
 | `wiki-lib.mjs` | 위키 공통 라이브러리(파싱·프론트매터 등). |
 | `wiki-links.mjs` | 위키 링크·스키마 검사기(`wiki:check`), 안전한 자동 연결. |
 | `wiki-context.mjs` | ADR에서 연결된 문서를 예산 안에서 골라 맥락 목록을 만든다. |
+| `git-guard.mjs` | 사용자가 시키지 않은 턴의 `git push`를 막는 훅(turn-start/pre-tool). 일지만 담은 커밋의 허용 변수도 커밋을 시킨 턴에만 쓰게 한다. |
 | `wiki-hook.mjs` | Write/Edit 후·세션 종료 시 위키 링크를 검사하는 훅(post/stop). |
 | `worktree-merge-inspect.mjs` | 병렬 워크트리 병합 시 공유 원장 충돌을 진단한다. |
 | `claude-catchup.sh` | Claude 세션 시작 시 일지 따라잡기 주입. |
@@ -105,6 +106,9 @@ orbit이 없는 저장소에서는 멈춘다. `/aside`·`/checkpoint` 명령은 
 
 설치되면 대상 `.githooks/commit-msg`. 커밋 메시지에 `Decision:` 트레일러가 있는데 실제
 `decisions/` 변경이 없으면 경고하는 git 훅.
+
+`assets/githooks/pre-commit`은 대상 `.githooks/pre-commit`. 스테이징된 파일이 일지(`worklog.md`·`worklog-state.json`)뿐이면
+커밋을 거절한다. 일지는 다음 작업 커밋에 함께 싣는다.
 
 
 ### 3.7 `assets/legacy/` — 마이그레이션 감지용 옛 버전

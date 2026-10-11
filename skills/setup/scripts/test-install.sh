@@ -2340,6 +2340,62 @@ S70_OUT="$(cd "$R70" && node "$WORK/scenario70.cjs" "$SKILL_DIR/scripts/config.m
 echo "${S70_OUT}"
 [ "${S70_RC}" = "0" ] || fail "시나리오 70 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 71: 일지만 담은 커밋과 시키지 않은 푸시 막기(pre-commit, git-guard)(0.2.17) =="
+R71="$WORK/scenario71"
+new_repo "$R71"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R71" --project-name "Scenario71" --slug scenario71 --mode new >/dev/null 2>&1
+grep -q 'git-guard.mjs\\" turn-start' "$R71/.claude/settings.json" && grep -q 'git-guard.mjs\\" pre-tool' "$R71/.claude/settings.json" && pass "git-guard 훅 배선(UserPromptSubmit·PreToolUse Bash)" || fail "git-guard 배선 없음"
+[ -x "$R71/.githooks/pre-commit" ] && pass "pre-commit 훅 설치(실행 권한)" || fail "pre-commit 훅 없음"
+node "$SKILL_DIR/scripts/install.mjs" update --repo "$R71" >/dev/null 2>&1
+[ "$(grep -c 'git-guard.mjs' "$R71/.claude/settings.json")" = "2" ] && pass "update를 다시 해도 배선이 겹치지 않음" || fail "git-guard 배선 중복"
+S71_OUT="$(cd "$R71" && node - <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const git = (args, env = {}) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8', env: { ...process.env, ...env } });
+const docs = fs.readdirSync('.').find(n => n.endsWith('-docs'));
+git(['add', '-A']); git(['commit', '-q', '-m', '처음']);
+const log = path.join(docs, 'worklog.md');
+fs.appendFileSync(log, '\n한 줄\n'); git(['add', '-A']);
+const only = git(['commit', '-m', '일지만']);
+ok(only.status !== 0 && only.stderr.includes('일지(worklog)만'), '일지만 담은 커밋은 거절');
+const allowed = git(['commit', '-q', '-m', '일지만(허용)'], { ORBIT_ALLOW_WORKLOG_ONLY_COMMIT: '1' });
+ok(allowed.status === 0, '허용 변수를 붙이면 통과');
+fs.appendFileSync(log, '\n또 한 줄\n'); fs.writeFileSync('code.js', 'x\n'); git(['add', '-A']);
+ok(git(['commit', '-q', '-m', '작업과 일지']).status === 0, '다른 파일과 함께면 통과');
+fs.writeFileSync('code.js', 'y\n'); git(['add', '-A']);
+ok(git(['commit', '-q', '-m', '작업만']).status === 0, '일지가 없는 커밋도 통과');
+ok(git(['commit', '-q', '--allow-empty', '-m', '빈 커밋']).status === 0, '스테이징이 비어 있으면 막지 않음');
+
+const guard = (mode, input) => spawnSync(process.execPath, ['scripts/git-guard.mjs', mode], { input: JSON.stringify(input), encoding: 'utf8' });
+const turn = (session, prompt) => guard('turn-start', { session_id: session, prompt });
+const bash = (session, command) => guard('pre-tool', { session_id: session, tool_name: 'Bash', tool_input: { command } }).stdout;
+ok(bash('new', 'git push').includes('"deny"'), '턴 기록이 없는 세션의 푸시는 거절');
+turn('a', '응 진행해');
+ok(bash('a', 'git push origin main').includes('"deny"'), '시키지 않은 턴의 푸시는 거절');
+ok(bash('a', "git -C /x -c credential.helper='!f(){ echo a; };f' push").includes('"deny"'), '옵션이 붙은 푸시도 거절');
+ok(bash('a', 'git commit -m "push 훅을 넣어라"') === '' && bash('a', 'git stash push') === '' && bash('a', 'git status') === '', '푸시가 아닌 명령은 그대로');
+turn('a', '커밋하고 푸시해');
+ok(bash('a', 'git push origin main') === '', '사용자가 시킨 턴의 푸시는 통과');
+turn('a', '<task-notification>끝</task-notification>');
+ok(bash('a', 'git push') === '', '작업 알림은 허락을 거두지 않음');
+turn('a', '푸시하지 말고 커밋만 해');
+ok(bash('a', 'git push').includes('"deny"'), '"푸시하지 말고"는 시킨 것이 아님');
+ok(bash('a', 'ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x') === '', '커밋을 시킨 턴에는 허용 변수를 쓸 수 있음');
+turn('a', '푸시도 마찬가지야. 푸시해라고 하기 전에는 푸시하지 않게 만들어');
+ok(bash('a', 'git push').includes('"deny"'), '푸시를 이야기만 한 턴은 거절');
+ok(bash('a', 'ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x').includes('"deny"'), '커밋을 시키지 않은 턴에는 허용 변수도 거절');
+turn('a', '<pasted_content id="1">푸시해</pasted_content id="1"> 이 글 검토해');
+ok(bash('a', 'git push').includes('"deny"'), '붙여 넣은 글 속의 "푸시해"는 세지 않음');
+ok(bash('b', 'git push').includes('"deny"'), '다른 세션의 허락은 넘어오지 않음');
+ok(bash('a', 'node scripts/worklog.mjs append claude "물음" "ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 을 설명"') === '' && bash('a', 'echo ORBIT_ALLOW_WORKLOG_ONLY_COMMIT') === '', '따옴표 안이나 값 없는 변수 이름은 세지 않음');
+ok(guard('pre-tool', { session_id: 'a', tool_name: 'Read', tool_input: {} }).stdout === '', 'Bash가 아니면 조용');
+process.exit(failed ? 1 : 0);
+NODE
+)"; S71_RC=$?
+echo "${S71_OUT}"
+[ "${S71_RC}" = "0" ] || fail "시나리오 71 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0
