@@ -2299,6 +2299,7 @@ R70="$WORK/scenario70"
 new_repo "$R70"
 node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R70" --project-name "Scenario70" --slug scenario70 --mode new >/dev/null 2>&1
 [ -f "$SKILL_DIR/../config/SKILL.md" ] && grep -q 'config.mjs" show' "$SKILL_DIR/../config/SKILL.md" && pass "config 스킬이 config.mjs를 부름" || fail "config 스킬 없음"
+grep -q 'AskUserQuestion' "$SKILL_DIR/../config/SKILL.md" && grep -q 'Type something' "$SKILL_DIR/../config/SKILL.md" && grep -q -- '--json' "$SKILL_DIR/../config/SKILL.md" && pass "config 스킬: 고르는 화면으로 묻고 자유 입력을 받음" || fail "config 스킬에 고르는 화면 절차 없음"
 cat > "$WORK/scenario70.cjs" <<'NODE'
 const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
 let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
