@@ -28,8 +28,8 @@ const INJECT_LIMIT = 2200;
 // 그래서 걸린 것만 Haiku가 가른다. '또는·또한'은 뺀다.
 export const SIGNAL = /(다시|또(?!는|한)|재발|도로|아직도|여전히|원래|예전|저번|지난번|되돌|롤백|번복|바꾸자|바꿔|취소하|안\s?하기로|하지\s?않기로|그만두|again|still|revert|undo|regress|roll\s?back|used to|previously)/i;
 
-// 사람이 친 입력이 아닌 것(알림·컴팩션 이어 받기·슬래시 명령 감싸기·곁가지 메모)은 보지 않는다.
-const NOT_HUMAN = /^(<task-notification>|<command-|<local-command|<bash-|This session is being continued|Stop hook feedback|Here is a note offered by a side agent|\[Artifact comment)/;
+// 사람이 친 입력이 아닌 것(알림·세션 간 메시지·컴팩션 이어 받기·슬래시 명령 감싸기·곁가지 메모)은 보지 않는다.
+const NOT_HUMAN = /^(<task-notification>|<cross-session-message|<system-reminder|<command-|<local-command|<bash-|\[Cross-session|This session is being continued|Stop hook feedback|Here is a note offered by a side agent|\[Artifact comment)/;
 
 export const SYSTEM = `You classify ONE message a user sent to a coding agent in a project with a long work history.
 Decide whether the message brings back something that was ALREADY handled or decided earlier in this project:

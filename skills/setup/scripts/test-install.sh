@@ -2550,6 +2550,7 @@ ok(hook('자정 버그 또 났어', { ORBIT_AGAIN: 'off' }).stdout === '', 'ORBI
 ok(hook('자정 버그 또 났어', { ORBIT_AGAIN_CHILD: '1' }).stdout === '', '판단용 claude 안에서는 아무것도 안 함(재귀 방지)');
 const c1 = lines().length;
 ok(hook('This session is being continued from a previous conversation. 다시').stdout === '' && lines().length === c1, '컴팩션 이어 받기 글은 보지 않음');
+ok(hook('<cross-session-message from="uds:/tmp/x.sock">자정 버그 또 났어</cross-session-message>').stdout === '' && lines().length === c1, '세션 간 메시지는 보지 않음(사람 입력이 아님)');
 hook('자정버그 상태 알려 줘', { STUB_MODE: 'none' });
 ok(lines().length === c1 + 1, '신호 낱말이 없어도 알려진 주제 이름이 있으면 판단');
 // 측정 모듈 자리
