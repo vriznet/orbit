@@ -84,12 +84,15 @@ function judge(prompt, topics) {
   const model = process.env.ORBIT_AGAIN_MODEL || 'haiku';
   const timeout = Number(process.env.ORBIT_AGAIN_TIMEOUT_MS) > 0 ? Number(process.env.ORBIT_AGAIN_TIMEOUT_MS) : 15000;
   const started = Date.now();
+  // --effort low: 짧은 분류에 생각 토큰을 쓰지 않게 한다(실측: 생각 0, 출력 약 65토큰, 2.6~3.4초 — 기본값은 생각 80~110토큰).
+  // 표준 입력은 닫아 둔다(열려 있으면 claude -p가 입력을 3초 기다린다).
+  const effort = process.env.ORBIT_AGAIN_EFFORT || 'low';
   const run = spawnSync(claude, [
-    '-p', '--model', model,
+    '-p', '--model', model, '--effort', effort,
     '--setting-sources', '', '--strict-mcp-config', '--tools', '', '--disable-slash-commands',
     '--no-session-persistence', '--output-format', 'json', '--system-prompt', SYSTEM,
     message,
-  ], { cwd: os.tmpdir(), encoding: 'utf8', timeout, env: { ...process.env, ORBIT_AGAIN_CHILD: '1' }, maxBuffer: 4 * 1024 * 1024 });
+  ], { cwd: os.tmpdir(), encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ORBIT_AGAIN_CHILD: '1' }, maxBuffer: 4 * 1024 * 1024 });
   const wallMs = Date.now() - started;
   if (run.error || run.status !== 0) {
     const reason = run.error?.code === 'ETIMEDOUT' ? `시간 초과(${timeout}ms)` : clip(run.error?.message || run.stderr || `종료 코드 ${run.status}`, 200);

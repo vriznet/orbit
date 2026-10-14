@@ -2539,7 +2539,7 @@ const ctx = h1.stdout ? JSON.parse(h1.stdout).hookSpecificOutput : null;
 ok(ctx && ctx.hookEventName === 'UserPromptSubmit' && ctx.additionalContext.includes('[orbit 다시]') && ctx.additionalContext.includes("주제 '자정 버그' 흐름") && ctx.additionalContext.includes(`#${n1}`), "신호 낱말 + Haiku '재발' → 주제 흐름 주입");
 ok(ctx && ctx.additionalContext.includes('--again 재발') && ctx.additionalContext.includes('tasks.mjs reopen'), '주입에 기록·다시 열기 안내');
 const args = JSON.parse(lines()[0] || '[]');
-ok(args.includes('--setting-sources') && args[args.indexOf('--setting-sources') + 1] === '' && args.includes('--no-session-persistence') && args.includes('--tools') && args[args.indexOf('--model') + 1] === 'haiku', '판단용 claude는 설정·도구 없이 haiku로');
+ok(args.includes('--setting-sources') && args[args.indexOf('--setting-sources') + 1] === '' && args.includes('--no-session-persistence') && args.includes('--tools') && args[args.indexOf('--model') + 1] === 'haiku' && args[args.indexOf('--effort') + 1] === 'low', '판단용 claude는 설정·도구 없이 haiku로(생각 없이 --effort low)');
 ok((args.at(-1) || '').includes('- 자정 버그 —'), '판단 입력에 알려진 주제와 상태');
 const before = lines().length;
 ok(hook('오늘 할 일 정리해 줘').stdout === '' && lines().length === before, '신호 없는 입력은 Haiku를 부르지 않음');
