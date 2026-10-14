@@ -2465,6 +2465,133 @@ NODE
 echo "${S72_OUT}"
 [ "${S72_RC}" = "0" ] || fail "시나리오 72 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 73: 주제 흐름 — 주제·다시·확인 칸, topics·thread, 할일 근거·다시 열기, '다시' 감지 훅, 확인 칸 알림, 파일 기억의 주제 상태(0.2.19) =="
+R73="$WORK/scenario73"
+new_repo "$R73"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R73" --project-name "Scenario73" --slug scenario73 --mode new >/dev/null 2>&1
+CFG73="$(node "$SKILL_DIR/scripts/config.mjs" show --repo "$R73" --json 2>/dev/null)"
+echo "$CFG73" | grep -q 'ORBIT_AGAIN"' && echo "$CFG73" | grep -q 'ORBIT_VERIFY_NUDGE' && pass "설정에 again·verify-nudge 스위치" || fail "설정 스위치 없음"
+S73_OUT="$(cd "$R73" && node - <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd(); const DOCS = path.join(ROOT, 'scenario73-docs'); const LOG = path.join(DOCS, 'worklog.md');
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const wl = (...a) => spawnSync(process.execPath, ['scripts/worklog.mjs', ...a], { encoding: 'utf8' });
+const tk = (...a) => spawnSync(process.execPath, ['scripts/tasks.mjs', ...a], { encoding: 'utf8' });
+const block = (n) => fs.readFileSync(LOG, 'utf8').split(/\n(?=## \[)/).find((b) => b.startsWith(`## [#${n}]`)) || '';
+const num = (r) => Number((r.stdout.match(/기록됨 \[#(\d+)\]/) || [])[1]);
+
+// 설치
+ok(fs.existsSync('scripts/topic-lib.mjs') && fs.existsSync('scripts/again-hook.mjs'), '새 스크립트 설치(topic-lib·again-hook)');
+const settings = JSON.parse(fs.readFileSync('.claude/settings.json', 'utf8'));
+ok(settings.hooks.UserPromptSubmit.flatMap((g) => g.hooks).some((h) => (h.args?.[1] || '').includes('scripts/again-hook.mjs') && h.timeout >= 20), "UserPromptSubmit에 '다시' 감지 훅(제한 시간 20초 이상)");
+ok(fs.readFileSync('CLAUDE.md', 'utf8').includes('--again 번복|재발|재요청|재작업'), 'CLAUDE.md에 주제·다시·확인 칸 안내');
+
+// worklog 칸
+const n1 = num(wl('append', 'claude', '1일 0시 거래가 전월에 잡힘', 'UTC 변환을 고쳤다', '--topic', '자정 버그'));
+ok(/^- 주제: 자정 버그$/m.test(block(n1)), '--topic → 주제 줄');
+const n2 = num(wl('append', 'claude', '3월 합계가 안 맞음', '다시 나서 월말 계산을 고침', '--topic', '자정버그', '--again', '재발', '--verified', 'npm test 통과'));
+ok(/^- 다시: 재발$/m.test(block(n2)) && /^- 확인: npm test 통과$/m.test(block(n2)), '--again·--verified → 다시·확인 줄');
+ok(wl('append', 'claude', 'x', 'y', '--again', '재발').status === 1, '주제 없는 --again 거부');
+ok(wl('append', 'claude', 'x', 'y', '--topic', 'a', '--again', '몰라').status === 1, '모르는 갈래 거부');
+const r3 = wl('append', 'claude', '버그 보기', 'x', '--topic', '자정 시간대 버그'); const n3 = num(r3);
+ok(/비슷한 기존 주제: '자정 버그'/.test(r3.stdout), '처음 쓰는 주제가 기존 주제와 비슷하면 알림');
+ok(wl('topic', 'claude', String(n3), '자정 버그', '--replace').status === 0 && /^- 주제: 자정 버그$/m.test(block(n3)), 'topic --replace로 주제를 바꿈');
+ok(wl('verified', 'claude', String(n1), '미확인').status === 0 && wl('verified', 'claude', String(n1), '또').status === 1, 'verified는 한 번만 덧붙임');
+const topics = wl('topics', 'claude');
+ok(topics.status === 0 && /자정 버그.*다시 1번\(재발\)/.test(topics.stdout), 'topics: 주제와 한 줄 상태');
+const thread = wl('thread', 'claude', '자정-버그');
+ok(thread.status === 0 && thread.stdout.includes(`#${n1}`) && thread.stdout.includes('[다시(재발)]') && thread.stdout.includes('(확인: 미확인)'), 'thread: 표기가 달라도 한 흐름, 다시·확인 표시');
+ok(wl('thread', 'claude', '없는주제').status === 1, '없는 주제는 오류');
+
+// 할일 근거·다시 열기
+const id = (tk('add', '자정 버그 고치기', '--owner', 'ai', '--action', 'next', '--urgency', 'high', '--source', `#${n1}`, '--topic', '자정 버그').stdout.match(/T-\S+/) || [])[0];
+ok(tk('done', id).status === 1, '근거 없는 done 거부');
+ok(tk('done', id, '--evidence', 'test/summary.test.js 통과').status === 0, '근거가 있으면 완료');
+ok(fs.readFileSync(path.join(DOCS, 'tasks-done.md'), 'utf8').includes('test/summary.test.js 통과'), '완료 아카이브에 근거');
+const again = wl('append', 'claude', '또 남', 'x', '--topic', '자정 버그', '--again', '재발');
+ok(again.stdout.includes(`tasks.mjs reopen ${id}`), "'다시' 기록 뒤 닫힌 할일을 다시 여는 명령 안내");
+ok(tk('reopen', id).status === 1, '까닭 없는 reopen 거부');
+const re = tk('reopen', id, '--reason', '3월에 다시 남');
+ok(re.status === 0 && /다시 열린 횟수 1/.test(re.stdout), 'reopen: 같은 ID로 되살림');
+const db = JSON.parse(fs.readFileSync(path.join(DOCS, 'tasks.json'), 'utf8'));
+const t = db.open.find((x) => x.id === id);
+ok(t && t.reopens?.[0]?.evidence === 'test/summary.test.js 통과' && !t.doneAt && !t.evidence, '다시 열린 이력에 전의 완료일·근거');
+ok(fs.readFileSync(path.join(DOCS, 'tasks.md'), 'utf8').includes('🔁 다시 열림 1회'), '원장 표에 다시 열림 표시');
+ok(tk('reopen', id, '--reason', 'x').status === 1, '이미 열린 할일은 reopen 거부');
+ok(wl('thread', 'claude', '자정 버그').stdout.includes('다시 열림: 3월에 다시 남'), 'thread에 할일 사건');
+
+// '다시' 감지 훅(가짜 claude)
+const stubDir = path.join(ROOT, '..', 'scenario73-stub'); fs.mkdirSync(stubDir, { recursive: true });
+const calls = path.join(stubDir, 'calls.txt'); const stub = path.join(stubDir, 'claude');
+fs.writeFileSync(stub, `#!/usr/bin/env node
+const fs = require('fs'); fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + '\\n');
+const mode = process.env.STUB_MODE || 'again';
+if (mode === 'fail') { process.stderr.write('boom'); process.exit(3); }
+const decision = mode === 'none' ? { again: false, kind: 'none', topic: null, query: '', why: '일반 요청' } : { again: true, kind: '재발', topic: '자정버그', query: '자정 버그', why: '고친 버그가 다시 남' };
+process.stdout.write(JSON.stringify({ type: 'result', result: '\`\`\`json\\n' + JSON.stringify(decision) + '\\n\`\`\`', usage: { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 0, cache_creation_input_tokens: 700 }, total_cost_usd: 0.0002, duration_api_ms: 900, modelUsage: { 'claude-haiku-5-5': {} } }));
+`);
+fs.chmodSync(stub, 0o755);
+const hook = (prompt, env = {}) => spawnSync(process.execPath, ['scripts/again-hook.mjs'], { input: JSON.stringify({ session_id: 's73', prompt_id: 'p1', prompt }), encoding: 'utf8', env: { ...process.env, ORBIT_AGAIN_CLAUDE: stub, ...env } });
+const lines = () => (fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean) : []);
+const h1 = hook('자정 버그 또 났어');
+const ctx = h1.stdout ? JSON.parse(h1.stdout).hookSpecificOutput : null;
+ok(ctx && ctx.hookEventName === 'UserPromptSubmit' && ctx.additionalContext.includes('[orbit 다시]') && ctx.additionalContext.includes("주제 '자정 버그' 흐름") && ctx.additionalContext.includes(`#${n1}`), "신호 낱말 + Haiku '재발' → 주제 흐름 주입");
+ok(ctx && ctx.additionalContext.includes('--again 재발') && ctx.additionalContext.includes('tasks.mjs reopen'), '주입에 기록·다시 열기 안내');
+const args = JSON.parse(lines()[0] || '[]');
+ok(args.includes('--setting-sources') && args[args.indexOf('--setting-sources') + 1] === '' && args.includes('--no-session-persistence') && args.includes('--tools') && args[args.indexOf('--model') + 1] === 'haiku', '판단용 claude는 설정·도구 없이 haiku로');
+ok((args.at(-1) || '').includes('- 자정 버그 —'), '판단 입력에 알려진 주제와 상태');
+const before = lines().length;
+ok(hook('오늘 할 일 정리해 줘').stdout === '' && lines().length === before, '신호 없는 입력은 Haiku를 부르지 않음');
+ok(hook('다시 한번 점검해봐', { STUB_MODE: 'none' }).stdout === '' && lines().length === before + 1, "Haiku가 '아님'이면 주입 없음");
+const f = hook('또 깨졌어', { STUB_MODE: 'fail' });
+ok(f.status === 0 && f.stdout === '', '판단 실패는 조용히 통과(입력을 막지 않음)');
+ok(hook('자정 버그 또 났어', { ORBIT_AGAIN: 'off' }).stdout === '', 'ORBIT_AGAIN=off → 끔');
+ok(hook('자정 버그 또 났어', { ORBIT_AGAIN_CHILD: '1' }).stdout === '', '판단용 claude 안에서는 아무것도 안 함(재귀 방지)');
+const c1 = lines().length;
+ok(hook('This session is being continued from a previous conversation. 다시').stdout === '' && lines().length === c1, '컴팩션 이어 받기 글은 보지 않음');
+hook('자정버그 상태 알려 줘', { STUB_MODE: 'none' });
+ok(lines().length === c1 + 1, '신호 낱말이 없어도 알려진 주제 이름이 있으면 판단');
+// 측정 모듈 자리
+fs.writeFileSync('scripts/again-monitor.mjs', `import fs from 'node:fs'; export function record(root, r) { fs.appendFileSync(${JSON.stringify(path.join(stubDir, 'monitor.jsonl'))}, JSON.stringify(r) + '\\n'); }\n`);
+hook('자정 버그 또 났어'); hook('그냥 질문 하나');
+const recs = fs.readFileSync(path.join(stubDir, 'monitor.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+ok(recs.length === 2 && recs[0].called === true && recs[0].decision?.kind === '재발' && recs[0].usage?.output === 40 && recs[0].injectedChars > 0 && recs[1].called === false, 'again-monitor.mjs가 있으면 판단마다 기록을 넘김(호출 여부·판단·토큰·주입 길이)');
+fs.rmSync('scripts/again-monitor.mjs');
+
+// 확인 칸 알림(종료 훅)
+const hookW = (mode, input, env = {}) => spawnSync(process.execPath, ['scripts/worklog-hook.mjs', mode], { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, ...env } });
+const tokenOf = (r) => (r.stdout.match(/--turn-token \\?"([0-9a-f]+)\\?"/) || [])[1];
+const vturn = (sid, pid, result, extra = [], env = {}) => {
+  const b = hookW('begin', { session_id: sid, prompt: '요청', prompt_id: pid });
+  const T = path.join(ROOT, '..', `${sid}.jsonl`);
+  fs.writeFileSync(T, JSON.stringify({ type: 'user', promptId: pid, message: { role: 'user', content: '요청' } }) + '\n');
+  wl('append', 'claude', '물음', result, '--session-id', sid, '--turn-token', tokenOf(b), ...extra);
+  return (active = false) => hookW('stop', { session_id: sid, prompt_id: pid, transcript_path: T, stop_hook_active: active }, env);
+};
+const v1 = vturn('s73v1', 'pv1', '캐시 버그를 고쳤다');
+const r1 = v1(); const j = r1.stdout ? JSON.parse(r1.stdout) : {};
+ok(j.decision === 'block' && /verified claude \d+/.test(j.reason) && j.reason.includes('미확인'), "결과에 '고쳤다'인데 확인 없음 → 한 번 알림(verified 안내)");
+ok(v1().stdout === '', '같은 항목은 다시 알리지 않음');
+ok(vturn('s73v2', 'pv2', '캐시 버그를 고쳤다', ['--verified', '재현 테스트 통과'])().stdout === '', '확인이 있으면 통과');
+ok(vturn('s73v3', 'pv3', '문서를 정리했다')().stdout === '', '고쳤다·해결이 없으면 통과');
+const v5 = vturn('s73v5', 'pv5', '살펴봄', ['--topic', '자정 버그', '--again', '재발'])();
+ok(v5.stdout.includes("'다시' 항목인데"), "'다시' 항목은 결과 문구와 상관없이 확인을 물음");
+ok(vturn('s73v4', 'pv4', '고쳤다', [], { ORBIT_VERIFY_NUDGE: 'off' })().stdout === '', 'ORBIT_VERIFY_NUDGE=off → 끔');
+
+// 파일 기억의 주제 상태
+fs.mkdirSync(path.join('.git', 'orbit-memory'), { recursive: true });
+fs.writeFileSync(path.join('.git', 'orbit-memory', 'tools.jsonl'), JSON.stringify({ v: 1, session: 'old', seq: 1, at: '2026-09-01T00:00:00Z', tool: 'Edit', file: 'src/summary.js', worklog: n1 }) + '\n');
+fs.mkdirSync('src', { recursive: true }); fs.writeFileSync('src/summary.js', 'x\n');
+const pre = spawnSync(process.execPath, ['scripts/memory-hook.mjs', 'pre-tool'], { input: JSON.stringify({ session_id: 's73p', tool_name: 'Read', tool_input: { file_path: path.join(ROOT, 'src', 'summary.js') } }), encoding: 'utf8' });
+const pc = pre.stdout ? JSON.parse(pre.stdout).hookSpecificOutput.additionalContext : '';
+ok(pc.includes("주제 '자정 버그'") && pc.includes('다시') && pc.includes('worklog.mjs thread claude'), '파일을 열 때 이어진 주제의 상태를 함께 넣음');
+process.exit(failed ? 1 : 0);
+NODE
+)"; S73_RC=$?
+echo "${S73_OUT}"
+[ "${S73_RC}" = "0" ] || fail "시나리오 73 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0

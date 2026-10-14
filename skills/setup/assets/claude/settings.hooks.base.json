@@ -51,6 +51,19 @@
             "command": "bash",
             "args": [
               "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/again-hook.mjs\""
+            ],
+            "timeout": 25
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "-c",
               "node \"$CLAUDE_PROJECT_DIR/scripts/worklog-hook.mjs\" begin"
             ],
             "timeout": 10

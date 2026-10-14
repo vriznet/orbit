@@ -8,6 +8,7 @@
 //                    도구 색인에 덧붙인다(결정 6·7). 도구 출력은 복사하지 않는다.
 //   pre-tool         PreToolUse(Read·Edit·Write): 그 파일을 다룬 과거 턴을 '날짜 · 번호 · 한 줄' 목록으로
 //                    넣는다(본문 없음, 상세는 memory.mjs show). 같은 세션에서 파일마다 한 번(컴팩션 뒤 다시).
+//                    그 턴들에 주제가 붙어 있으면 주제마다 한 줄 상태(마지막 완료·확인 여부·다시 횟수·할일)도 함께 넣는다.
 //                    큰 코드 파일(기본 300줄)을 범위 없이 Read하면 개요와 '필요한 부분만 읽기' 안내도 함께 넣는다(막지 않음).
 // 결정: D-프로젝트-기억-분담(결정 3). 실패해도 컴팩션을 막지 않는다(종료 코드 2를 쓰지 않음).
 
@@ -22,6 +23,7 @@ import {
   dialogueId, gitStatusEntries, isCompactCommand, localTime, repoRelative, textOf, toolFilePath, toolResults, toolUses, toolsId, withLock, worktreeStateDir, writePrivateFile,
 } from './memory-lib.mjs';
 import { redact, redactPrefix } from './redact.mjs';
+import { buildTopics, findTopic, parseEntries, readTasks, topicStatus } from './topic-lib.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DOCS = path.join(ROOT, '{{DOCS_DIR}}');
@@ -358,7 +360,8 @@ function stop(input) {
 // (permissionDecision을 쓰지 않는다). 결정: D-프로젝트-기억-분담(결정 7).
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const FILE_MEMORY_TURNS = 3;
-const FILE_MEMORY_LIMIT = 1200;
+const FILE_MEMORY_TOPICS = 2;
+const FILE_MEMORY_LIMIT = 1600;
 
 function injectedRegistryPath(sessionId) {
   const dir = worktreeStateDir(ROOT, 'memory');
@@ -375,16 +378,32 @@ function readJsonl(file) {
   return out;
 }
 
-function worklogAsks() {
-  const asks = new Map();
+function worklogEntries() {
   try {
-    for (const block of fs.readFileSync(path.join(DOCS, 'worklog.md'), 'utf8').split(/\n(?=## \[#)/)) {
-      const n = (block.match(/^## \[#(\d+)\]/) || [])[1];
-      const ask = (block.match(/^- 물음: (.*)$/m) || [])[1];
-      if (n && ask) asks.set(Number(n), ask);
-    }
-  } catch {}
-  return asks;
+    return parseEntries(fs.readFileSync(path.join(DOCS, 'worklog.md'), 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+// 이 파일을 다룬 턴들의 worklog 항목에 붙은 주제 → 주제마다 한 줄 상태. 결정: D-주제흐름-다시.
+// "예전에 고쳤다(완료)"는 기록이 이 파일과 이어져 있으면, 파일을 다시 열 때 그 사실과 확인 여부가 보이게 한다.
+function fileTopics(turns, entries) {
+  const numbers = new Set([...turns.values()].map((turn) => turn.record.worklog).filter(Boolean));
+  const names = [];
+  for (const entry of entries) if (numbers.has(entry.n)) for (const name of entry.topics) if (!names.includes(name)) names.push(name);
+  if (!names.length) return [];
+  const topics = buildTopics(entries, readTasks(DOCS));
+  const seen = new Set();
+  const lines = [];
+  for (const name of names.reverse()) {
+    const topic = findTopic(topics, name);
+    if (!topic || seen.has(topic.key)) continue;
+    seen.add(topic.key);
+    lines.push(`- 주제 '${topic.name}': ${topicStatus(topic)} — 흐름: node scripts/worklog.mjs thread claude "${topic.name}"`);
+    if (lines.length >= FILE_MEMORY_TOPICS) break;
+  }
+  return lines;
 }
 
 function fileMemory(rel) {
@@ -402,7 +421,8 @@ function fileMemory(rel) {
   }
   if (!turns.size) return '';
   const recent = [...turns.values()].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, FILE_MEMORY_TURNS);
-  const asks = worklogAsks();
+  const entries = worklogEntries();
+  const asks = new Map(entries.map((entry) => [entry.n, entry.ask]));
   const dialogue = new Map(readJsonl(path.join(shared, 'dialogue.jsonl')).map((r) => [dialogueId(r), r]));
   const lines = [`[orbit 기억] ${rel}을(를) 다룬 과거 턴 ${recent.length}개(최근 순, 전체 ${turns.size}):`];
   for (const turn of recent) {
@@ -413,6 +433,8 @@ function fileMemory(rel) {
     const ids = [r.worklog ? `#${r.worklog}` : '', dialogue.has(dialogueId(r)) ? dialogueId(r) : '', toolsId(r)].filter(Boolean).join(' ');
     lines.push(`- ${localTime(turn.at, { date: true })} · ${ids} · ${[...turn.tools].join('/')} · ${clip(String(said).replace(/\s+/g, ' ').trim() || '(글 없음)', 110)}`);
   }
+  const topicLines = fileTopics(turns, entries);
+  if (topicLines.length) lines.push('이 파일과 이어진 주제(지난 완료 기록은 지금 상태로 확인한 뒤 믿을 것):', ...topicLines);
   lines.push('상세: node scripts/memory.mjs show <번호>');
   const text = lines.join('\n');
   return text.length > FILE_MEMORY_LIMIT ? `${text.slice(0, FILE_MEMORY_LIMIT - 1)}…` : text;

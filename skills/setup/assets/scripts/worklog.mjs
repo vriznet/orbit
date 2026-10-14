@@ -14,7 +14,14 @@
 //   append ... --decision "<결정 근거>" --found "<발견>"  선택 칸. 결론형으로: 고른 것 / 버린 대안 / 근거 수치,
 //                                         이번 턴에 알아낸 사실. (--why는 같은 칸의 옛 이름으로 계속 받는다)
 //   summary <작성자> "<요약>"           최근 턴들을 하나로 묶어 요약한다 (3턴마다)
+//   append ... --topic "<주제>[, <주제>]" --again 번복|재발|재요청|재작업 --verified "<확인 방법>"
+//                                       주제 흐름 칸. 같은 대상(버그·기능·결정)을 다루는 턴은 같은 주제로 묶고, 예전에 끝냈거나
+//                                       정한 것이 다시 움직이면 --again, 고쳤다·해결했다고 적을 때는 무엇으로 확인했는지 --verified
 //   found <작성자> <N> "<발견>"         이미 적은 항목 #N에 '- 발견:' 줄을 덧붙인다(종료 훅 알림용, 이미 있으면 거부)
+//   verified <작성자> <N> "<확인>"      이미 적은 항목 #N에 '- 확인:' 줄을 덧붙인다(종료 훅 알림용, 이미 있으면 거부)
+//   topic <작성자> <N> "<주제>" [--again 갈래] [--replace]  이미 적은 항목 #N에 주제를 붙이거나 바꾼다
+//   topics <작성자> [검색어] [--json]   주제 목록과 한 줄 상태(최근에 다룬 것부터, 읽기 전용)
+//   thread <작성자> <주제> [--json]     한 주제의 흐름: 항목과 할일 사건(완료·다시 열림)을 날짜순으로(읽기 전용)
 //   catchup <작성자>                    책갈피 이후 밀린 내용을 보여주고 책갈피를 옮긴다 (없으면 조용)
 //   recent <작성자> [--mode compact] [--limit 글자수]  최근 턴 8개와 그 앞 구간 요약들을 보여준다 (읽기 전용)
 //
@@ -25,6 +32,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import {
+  AGAIN_KINDS, buildTopics, findTopic, normalizeTopic, parseEntries, readTasks, recentTopics, similarTopics, splitTopics,
+  threadLines, topicStatus,
+} from './topic-lib.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const LOG = path.join(ROOT, '{{DOCS_DIR}}', 'worklog.md');
@@ -233,7 +244,7 @@ function append(agent, ask, result, extra = {}) {
     const n = s.next;
     // 선택 칸은 값이 있을 때만 쓴다. 칸마다 한 줄(sanitize)이라 가짜 머리글이 생기지 않는다.
     // 결정: D-프로젝트-기억-분담(결정 5·7) — 이유와 "알아낸 것"을 모델 호출 없이 남긴다.
-    const optional = [['판단', extra.why], ['발견', extra.found]]
+    const optional = [['판단', extra.why], ['발견', extra.found], ['주제', extra.topics?.join(', ')], ['다시', extra.again], ['확인', extra.verified]]
       .filter(([, value]) => String(value ?? '').trim())
       .map(([label, value]) => `- ${label}: ${sanitizeLogText(value)}\n`)
       .join('');
@@ -338,13 +349,13 @@ function writeCompletedHookState(stateDir, statePath, updated) {
   try { fs.chmodSync(statePath, 0o600); } catch {}
 }
 
-// 이미 적은 항목에 '발견' 줄을 덧붙인다. 종료 훅이 "도구를 많이 쓴 턴인데 발견 칸이 비었다"고
-// 알린 뒤에 쓴다 — 같은 턴을 다시 append하면 항목이 둘로 갈리기 때문이다. 덧붙이기 규칙의 좁은
-// 예외: 그 항목 안에만 한 줄을 끼우고 다른 글은 건드리지 않는다. 결정: D-프로젝트-기억-분담(결정 5·7).
-function found(n, text) {
-  const value = sanitizeLogText(text).trim();
-  if (!/^\d+$/.test(String(n)) || !value) {
-    process.stderr.write('사용법: worklog found <작성자> <항목 번호> "<발견>"\n');
+// 이미 적은 항목에 한 줄을 끼운다(발견·확인·주제·다시). 종료 훅이 "도구를 많이 쓴 턴인데 발견 칸이 비었다",
+// "고쳤다고 적었는데 확인 칸이 없다"고 알린 뒤에 쓴다 — 같은 턴을 다시 append하면 항목이 둘로 갈리기 때문이다.
+// 덧붙이기 규칙의 좁은 예외: 그 항목 안의 해당 줄만 끼우거나(바꾸기는 주제·다시만) 다른 글은 건드리지 않는다.
+// 결정: D-프로젝트-기억-분담(결정 5·7), D-주제흐름-다시.
+function setFields(n, fields, { usage, replace = false, merge = false } = {}) {
+  if (!/^\d+$/.test(String(n)) || !fields.length || fields.some(([, value]) => !value)) {
+    process.stderr.write(`${usage}\n`);
     process.exit(1);
   }
   withLock(STATE, () => {
@@ -352,13 +363,100 @@ function found(n, text) {
     const blocks = fs.readFileSync(LOG, 'utf8').split(/(?=^## \[)/m);
     const index = blocks.findIndex((block) => block.startsWith(`## [#${n}]`));
     if (index === -1) { process.stderr.write(`항목 #${n}이 없습니다.\n`); process.exit(1); }
-    if (/^- 발견:/m.test(blocks[index])) { process.stderr.write(`항목 #${n}에 이미 발견 줄이 있습니다.\n`); process.exit(1); }
-    const body = blocks[index].replace(/\n+$/, '');
+    let body = blocks[index].replace(/\n+$/, '');
     const tail = blocks[index].slice(body.length) || '\n\n';
-    blocks[index] = `${body}\n- 발견: ${value}${tail}`;
+    for (const [label, value] of fields) {
+      const line = new RegExp(`^- ${label}: (.*)$`, 'm');
+      const existing = body.match(line);
+      if (!existing) { body = `${body}\n- ${label}: ${value}`; continue; }
+      if (merge) {
+        const names = splitTopics(existing[1]);
+        for (const name of splitTopics(value)) if (!names.some((old) => normalizeTopic(old) === normalizeTopic(name))) names.push(name);
+        body = body.replace(line, () => `- ${label}: ${names.join(', ')}`);
+      } else if (replace) {
+        body = body.replace(line, () => `- ${label}: ${value}`);
+      } else {
+        process.stderr.write(`항목 #${n}에 이미 ${label} 줄이 있습니다.\n`);
+        process.exit(1);
+      }
+    }
+    blocks[index] = `${body}${tail}`;
     atomicWriteFile(LOG, blocks.join(''));
-    process.stdout.write(`항목 #${n}에 발견을 덧붙였습니다.\n`);
   });
+}
+
+function found(n, text) {
+  setFields(n, [['발견', sanitizeLogText(text).trim()]], { usage: '사용법: worklog found <작성자> <항목 번호> "<발견>"' });
+  process.stdout.write(`항목 #${n}에 발견을 덧붙였습니다.\n`);
+}
+
+function verified(n, text) {
+  setFields(n, [['확인', sanitizeLogText(text).trim()]], { usage: '사용법: worklog verified <작성자> <항목 번호> "<확인 방법 — 확인 못 했으면 미확인>"' });
+  process.stdout.write(`항목 #${n}에 확인을 덧붙였습니다.\n`);
+}
+
+function topic(n, text, again, replace) {
+  const names = splitTopics(sanitizeLogText(text));
+  const usage = '사용법: worklog topic <작성자> <항목 번호> "<주제>" [--again 번복|재발|재요청|재작업] [--replace]';
+  setFields(n, [['주제', names.join(', ')]], { usage, replace, merge: !replace });
+  if (again) setFields(n, [['다시', again]], { usage, replace: true });
+  process.stdout.write(`항목 #${n}에 주제를 ${replace ? '바꿔 적었습니다' : '붙였습니다'}: ${names.join(', ')}${again ? ` (다시: ${again})` : ''}\n`);
+  topicHints(names, n, again);
+}
+
+// 기록 뒤 안내: 처음 쓰는 주제가 기존 주제와 비슷하면 알리고(같은 대상을 두 이름으로 가르지 않게),
+// '다시'면 그 주제의 닫힌 할일을 다시 열 명령을 보여 준다.
+function topicHints(names, n, again) {
+  if (!names.length || !fs.existsSync(LOG)) return;
+  const entries = parseEntries(fs.readFileSync(LOG, 'utf8'));
+  const tasks = readTasks(path.dirname(LOG));
+  const before = buildTopics(entries.filter((entry) => entry.n !== Number(n)), tasks);
+  for (const name of names) {
+    if (findTopic(before, name)) continue;
+    const similar = similarTopics(name, before);
+    if (similar.length) {
+      process.stdout.write(`처음 쓰는 주제 '${name}' — 비슷한 기존 주제: ${similar.map((t) => `'${t.name}'(${topicStatus(t)})`).join(', ')}. 같은 대상이면 기존 이름으로 바꾸세요: node scripts/worklog.mjs topic <작성자> ${n} "<기존 이름>" --replace\n`);
+    }
+  }
+  if (!again) return;
+  const all = buildTopics(entries, tasks);
+  for (const name of names) {
+    const current = findTopic(all, name);
+    for (const task of current?.tasks.filter((t) => t.state === 'done') || []) {
+      process.stdout.write(`'다시(${again})' — 주제 '${name}'의 닫힌 할일: ${task.id} ${task.title}. 다시 할 일이면: node scripts/tasks.mjs reopen ${task.id} --reason "<까닭>"\n`);
+    }
+  }
+}
+
+function topicsCommand(query, json) {
+  const topics = buildTopics(fs.existsSync(LOG) ? parseEntries(fs.readFileSync(LOG, 'utf8')) : [], readTasks(path.dirname(LOG)));
+  const key = normalizeTopic(query || '');
+  const list = recentTopics(topics, Infinity).filter((t) => !key || t.key.includes(key) || [...t.names].some((name) => normalizeTopic(name).includes(key)));
+  if (json) {
+    process.stdout.write(`${JSON.stringify(list.map((t) => ({ name: t.name, names: [...t.names], entries: t.entries.map((e) => e.n), tasks: t.tasks.map((x) => x.id), status: topicStatus(t) })), null, 2)}\n`);
+    return;
+  }
+  if (!list.length) {
+    process.stdout.write(query ? `'${query}'에 맞는 주제가 없습니다.\n` : '아직 주제가 붙은 기록이 없습니다. 같은 대상을 다루는 턴에 --topic "<주제>"를 붙이세요.\n');
+    return;
+  }
+  process.stdout.write(`── 주제 ${list.length}개 (최근에 다룬 것부터) ──\n`);
+  for (const t of list) process.stdout.write(`- ${t.name}${t.names.size > 1 ? ` (다른 표기: ${[...t.names].filter((name) => name !== t.name).join(', ')})` : ''} — ${topicStatus(t)}\n`);
+}
+
+function threadCommand(name, json) {
+  const topics = buildTopics(fs.existsSync(LOG) ? parseEntries(fs.readFileSync(LOG, 'utf8')) : [], readTasks(path.dirname(LOG)));
+  const current = name ? findTopic(topics, name) : null;
+  if (!current) {
+    const similar = name ? similarTopics(name, topics) : [];
+    process.stderr.write(`주제 '${name || ''}'이(가) 없습니다.${similar.length ? ` 비슷한 주제: ${similar.map((t) => t.name).join(', ')}` : ''} 목록: node scripts/worklog.mjs topics <작성자>\n`);
+    process.exit(1);
+  }
+  if (json) {
+    process.stdout.write(`${JSON.stringify({ name: current.name, status: topicStatus(current), entries: current.entries, tasks: current.tasks }, null, 2)}\n`);
+    return;
+  }
+  process.stdout.write(`── 주제 '${current.name}' 흐름 — ${topicStatus(current)} ──\n${threadLines(current, { limit: 40 }).join('\n')}\n`);
 }
 
 function summary(agent, text) {
@@ -577,6 +675,21 @@ const decisionText = takeOption('--decision');
 const legacyWhyText = takeOption('--why');
 const whyText = decisionText ?? legacyWhyText;
 const foundText = takeOption('--found');
+const topicText = takeOption('--topic');
+const againKind = takeOption('--again');
+const verifiedText = takeOption('--verified');
+function takeFlag(name) {
+  const index = argv.indexOf(name);
+  if (index === -1) return false;
+  argv.splice(index, 1);
+  return true;
+}
+const replaceFlag = takeFlag('--replace');
+const jsonFlag = takeFlag('--json');
+if (againKind !== null && !AGAIN_KINDS.includes(againKind)) {
+  process.stderr.write(`--again은 ${AGAIN_KINDS.join('|')} 중 하나입니다(받은 값: "${againKind}").\n`);
+  process.exit(1);
+}
 
 // 기록을 커밋에 포함 → 순서 실수(커밋 먼저, 기록 나중)를 원천 차단
 function gitCommitAll(msg) {
@@ -595,18 +708,31 @@ if (!AGENT_NAME.test(agent || '')) {
   process.exit(1);
 }
 if (cmd === 'append') {
-  const n = append(agent, a ?? '', b ?? '', { why: whyText, found: foundText });
+  const topics = splitTopics(sanitizeLogText(topicText ?? ''));
+  if (againKind && !topics.length) {
+    process.stderr.write('--again에는 어느 주제가 다시 움직였는지 --topic "<주제>"가 함께 있어야 합니다.\n');
+    process.exit(1);
+  }
+  const n = append(agent, a ?? '', b ?? '', { why: whyText, found: foundText, topics, again: againKind, verified: verifiedText });
   completeHookTurn(hookSessionId, hookTurnToken, hookTurnId, n);
+  topicHints(topics, n, againKind);
   if (commitMsg !== null) gitCommitAll(commitMsg);
 } else if (cmd === 'found') {
   found(a, b ?? '');
   if (commitMsg !== null) gitCommitAll(commitMsg);
-} else if (cmd === 'summary') {
+} else if (cmd === 'verified') {
+  verified(a, b ?? '');
+  if (commitMsg !== null) gitCommitAll(commitMsg);
+} else if (cmd === 'topic') {
+  topic(a, b ?? '', againKind, replaceFlag);
+  if (commitMsg !== null) gitCommitAll(commitMsg);
+} else if (cmd === 'topics') topicsCommand(a, jsonFlag);
+else if (cmd === 'thread') threadCommand(a, jsonFlag); else if (cmd === 'summary') {
   summary(agent, a ?? '');
   if (commitMsg !== null) gitCommitAll(commitMsg);
 } else if (cmd === 'catchup') catchup(agent);
 else if (cmd === 'recent') recent(recentMode, recentLimit);
 else {
-  process.stderr.write('사용법: worklog <append|summary|found|catchup|recent> <작성자(claude|codex|…)> ... [--commit "메시지"] [--session-id ID --turn-token TOKEN | --session-id ID --turn-id N] [--why 판단] [--found 발견] [--mode compact]\n');
+  process.stderr.write('사용법: worklog <append|summary|found|verified|topic|topics|thread|catchup|recent> <작성자(claude|codex|…)> ... [--commit "메시지"] [--session-id ID --turn-token TOKEN | --session-id ID --turn-id N] [--decision 판단] [--found 발견] [--topic 주제] [--again 갈래] [--verified 확인] [--mode compact]\n');
   process.exit(1);
 }

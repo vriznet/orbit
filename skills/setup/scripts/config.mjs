@@ -41,6 +41,10 @@ export const SWITCHES = [
     about: "도구를 이만큼 쓴 턴에 worklog '발견' 칸이 비면 한 번 알린다" },
   { name: 'read-outline-min-lines', env: 'ORBIT_READ_OUTLINE_MIN_LINES', fallback: '300', normalize: count, values: '0 이상의 수(0이면 끔)',
     about: '이 줄 수가 넘는 코드 파일을 범위 없이 읽으면 개요를 먼저 보여 준다' },
+  { name: 'again', env: 'ORBIT_AGAIN', fallback: 'on', normalize: onOff, values: 'on|off',
+    about: "사용자 입력이 예전 일의 번복·재발·재요청·재작업이면 Haiku가 판단해 그 주제의 흐름을 넣는다(신호 낱말이 든 입력만, 그때 약 3초)" },
+  { name: 'verify-nudge', env: 'ORBIT_VERIFY_NUDGE', fallback: 'on', normalize: onOff, values: 'on|off',
+    about: "worklog 결과에 '고쳤다·해결했다'가 있는데 확인 칸이 없으면 종료 훅이 한 번 알린다" },
   { name: 'agent-policy', env: 'ORBIT_AGENT_POLICY', fallback: 'off', normalize: onOff, values: 'on|off',
     about: 'on이면 general-purpose·fork 위임을 막고 orbit 위임 모드만 쓰게 한다' },
 ];

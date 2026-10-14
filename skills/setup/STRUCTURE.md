@@ -51,9 +51,11 @@
 
 | 파일 | 역할 |
 |---|---|
-| `worklog.mjs` | 작업 일지 CLI(append/summary/found/catchup/recent). 세션·에이전트 사이 턴 기록. append의 선택 칸 `--decision`(판단, 옛 이름 `--why`)·`--found`(발견), 이미 쓴 항목에 발견을 덧붙이는 `found`. `catchup`은 작성자 이름별 책갈피로 따라잡기(소비). 다른 작성자가 일지를 쓰면 `.git/orbit-state/worklog-pending/<이름>` 표시를 남기고, Claude의 턴 시작 훅은 이 표시가 있을 때만 `catchup claude`를 부른다(Claude 세션끼리는 책갈피를 읽지 않는다). `recent`는 최근 8턴과 그 앞 구간 요약을 주입하는 읽기 전용 명령(`--mode compact`면 머리글 '컴팩션 전 기록'). 8턴과 겹치는 요약은, 대신 넣을 사이 턴이 2개 이하이고 글자 상한 안이면 빼고 사이 턴을 원문으로 넣는다. 그렇지 않으면 겹치더라도 그 요약을 넣는다. 어떤 요약도 덮지 않는 사이 턴은 자리가 남는 만큼 새것부터 원문으로 넣는다. 넣지 못한 턴은 머리글에 번호로 적는다. `--limit 글자수`로 상한을 줄일 수 있다(컴팩션 복원이 남은 몫을 넘긴다). |
-| `worklog-hook.mjs` | 세션·턴 상태 훅. 매 턴 일지 미기록을 감지하고 종료를 막는다(begin/stop). 도구를 많이 쓴 턴에 '발견' 칸이 비면 한 번 알린다. |
-| `memory-hook.mjs` | 기억 훅: precompact(상태 파일), compact-restore(SessionStart compact 주입). 상태 파일의 '마지막 답변'은 턴 중간의 컴팩션일 때만 넣는다(턴이 끝난 상태면 Claude Code가 그 답변을 원문으로 남긴다), postcompact(요약 저장), turn-start(git 지문), stop(대화 글 사본·도구 색인), pre-tool(파일별 기억 목록·큰 파일 개요 안내). |
+| `worklog.mjs` | 작업 일지 CLI(append/summary/found/verified/topic/topics/thread/catchup/recent). 세션·에이전트 사이 턴 기록. append의 선택 칸 `--decision`(판단, 옛 이름 `--why`)·`--found`(발견)·`--topic`(주제)·`--again`(다시: 번복·재발·재요청·재작업)·`--verified`(확인), 이미 쓴 항목에 덧붙이는 `found`·`verified`·`topic`, 주제 목록 `topics`와 한 주제의 흐름 `thread`(항목과 할일 사건을 날짜순으로). 처음 쓰는 주제가 기존 주제와 비슷하면 알린다. `catchup`은 작성자 이름별 책갈피로 따라잡기(소비). 다른 작성자가 일지를 쓰면 `.git/orbit-state/worklog-pending/<이름>` 표시를 남기고, Claude의 턴 시작 훅은 이 표시가 있을 때만 `catchup claude`를 부른다(Claude 세션끼리는 책갈피를 읽지 않는다). `recent`는 최근 8턴과 그 앞 구간 요약을 주입하는 읽기 전용 명령(`--mode compact`면 머리글 '컴팩션 전 기록'). 8턴과 겹치는 요약은, 대신 넣을 사이 턴이 2개 이하이고 글자 상한 안이면 빼고 사이 턴을 원문으로 넣는다. 그렇지 않으면 겹치더라도 그 요약을 넣는다. 어떤 요약도 덮지 않는 사이 턴은 자리가 남는 만큼 새것부터 원문으로 넣는다. 넣지 못한 턴은 머리글에 번호로 적는다. `--limit 글자수`로 상한을 줄일 수 있다(컴팩션 복원이 남은 몫을 넘긴다). |
+| `worklog-hook.mjs` | 세션·턴 상태 훅. 매 턴 일지 미기록을 감지하고 종료를 막는다(begin/stop). 도구를 많이 쓴 턴에 '발견' 칸이 비면, 결과에 '고쳤다·해결했다'가 있거나 '다시' 항목인데 '확인' 칸이 비면 한 번 알린다. |
+| `topic-lib.mjs` | 주제 흐름 공용 모듈(모델 없음): worklog 항목과 할일의 주제를 묶어 한 줄 상태와 흐름을 만든다. 색인 파일 없이 worklog.md·tasks.json에서 그때그때 만든다. |
+| `again-hook.mjs` | '다시' 감지 훅(UserPromptSubmit): 신호 낱말·주제 이름이 든 입력만 Haiku가 번복·재발·재요청·재작업인지 판단하고, 맞으면 그 주제의 흐름(또는 기억 검색 상위)을 넣는다. 판단용 claude는 설정·훅·도구 없이 따로 띄운다. 끄기 `ORBIT_AGAIN=off`. 같은 폴더에 `again-monitor.mjs`가 있으면 판단마다 기록을 넘긴다(측정을 붙이는 자리). |
+| `memory-hook.mjs` | 기억 훅: precompact(상태 파일), compact-restore(SessionStart compact 주입). 상태 파일의 '마지막 답변'은 턴 중간의 컴팩션일 때만 넣는다(턴이 끝난 상태면 Claude Code가 그 답변을 원문으로 남긴다), postcompact(요약 저장), turn-start(git 지문), stop(대화 글 사본·도구 색인), pre-tool(파일별 기억 목록·이어진 주제의 상태·큰 파일 개요 안내). |
 | `memory-lib.mjs` | 기억 훅 공용: 세션 기록 파서, 상태 폴더, 잠금, git 지문, 저장소 상대 경로, 기억 번호. |
 | `memory.mjs` | 기억 CLI: `search`(ADR·위키·worklog·대화 사본·도구 활동, 번호 목록), `show <번호>`, `forget <문구> [--apply]`(/forget 스킬이 부름). |
 | `redact.mjs` | 기억 파일에 넣기 전 알려진 모양의 비밀값을 가린다. |

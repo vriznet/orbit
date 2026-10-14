@@ -10,5 +10,6 @@ Claude와 Codex는 대화 맥락을 공유하지 못한다. `{{DOCS_DIR}}/worklo
 - **최종 답변 전 — 기록**: 매 턴 한 줄로 남긴다. 기록 명령이 성공하기 전에는 최종 답변을 보내지 않는다.
   `node scripts/worklog.mjs append codex "<물음 요약>" "<결과 요약>"`
   "요약할 때"라고 나오면 이어서: `node scripts/worklog.mjs summary codex "<최근 3턴 통합 요약>"`
+  같은 대상(버그·기능·결정)을 다루면 `--topic "<주제>"`(이미 쓴 이름은 `node scripts/worklog.mjs topics codex`), 예전에 끝냈거나 정한 것이 다시 움직이면 `--again 번복|재발|재요청|재작업`, 고쳤다·해결했다고 적으면 `--verified "<확인 방법>"`(확인 못 했으면 "미확인")을 붙인다. 할일을 닫을 때는 `node scripts/tasks.mjs done <id> --evidence "<근거>"`, 다시 필요해지면 `reopen <id> --reason "<까닭>"`.
 - 일지는 **덧붙이기만.** Claude의 기록에 이견이 있으면 새 항목으로 남긴다(예: "Claude의 #12 판단에 반대 — 이유 …"). 다음 Claude 턴이 따라잡기로 읽는다.
 - 병렬 작업은 별도 디렉토리에서. 같은 일지에 동시 기록 금지(충돌). 합류 지점에서 서로 읽는다.

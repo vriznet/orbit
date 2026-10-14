@@ -57,7 +57,7 @@ argument-hint: "[바꿀 것 — 비우면 고르는 화면이 뜬다]"
 
 | 묶음(선택지 라벨) | 들어 있는 설정 |
 |---|---|
-| 조절 스위치 | `found-min-tools`, `read-outline-min-lines`, `compact-worklog`, `agent-policy` |
+| 조절 스위치 | `found-min-tools`, `read-outline-min-lines`, `compact-worklog`, `again`, `verify-nudge`, `agent-policy` |
 | 선택 모듈 켜기 | `codex`, `reviewers` (이미 켜진 것은 설명에 "이미 켜짐"이라고 적는다. 둘 다 켜져 있으면 이 묶음을 선택지에서 뺀다) |
 
 ## 값 선택지
@@ -67,6 +67,8 @@ argument-hint: "[바꿀 것 — 비우면 고르는 화면이 뜬다]"
 | `found-min-tools` | '발견' 칸 알림 기준 | `10`(기본), `5`, `20`, `0`(끔) | 0 이상의 수 |
 | `read-outline-min-lines` | 큰 파일 개요 안내 기준 | `300`(기본), `200`, `500`, `0`(끔) | 0 이상의 수 |
 | `compact-worklog` | 컴팩션 직후 worklog 다시 넣기 | `on`(기본), `off` | 없음 |
+| `again` | '다시'(번복·재발) 감지와 주제 흐름 넣기 | `on`(기본), `off` | 없음 |
+| `verify-nudge` | '고쳤다'인데 확인 칸이 없을 때 알림 | `on`(기본), `off` | 없음 |
 | `agent-policy` | general-purpose·fork 위임 막기 | `off`(기본), `on` | 없음 |
 | `codex` | Codex와 턴제 협업 모듈 | `켜기`, `그대로 두기` | 없음 |
 | `reviewers` | 리뷰어 에이전트 5종 | `켜기`, `그대로 두기` | 없음 |

@@ -6,8 +6,10 @@
 //
 // 사용:
 //   node scripts/tasks.mjs add "<제목>" --owner ai|human|both --action next|planning|waiting|someday \
-//        --urgency high|med|low --source "<출처>" [--due YYYY-MM-DD] [--wait "<대기이유>"] [--memo "<메모>"]
-//   node scripts/tasks.mjs done <id>
+//        --urgency high|med|low --source "<출처>" [--due YYYY-MM-DD] [--wait "<대기이유>"] [--memo "<메모>"] [--topic "<주제>"]
+//   node scripts/tasks.mjs done <id> --evidence "<근거>"   (무엇으로 끝났다고 봤는지: 테스트·커밋·파일·worklog #N. 확인 못 했으면 "미확인")
+//   node scripts/tasks.mjs reopen <id> --reason "<까닭>" [--action next|planning|waiting|someday ...]
+//                                         (완료·취소한 할일이 다시 필요해졌을 때 — 다시 열린 이력이 남는다)
 //   node scripts/tasks.mjs drop <id> --reason "<이유>"   (이유가 사라진 할일 취소 — 완료와 구분해 취소 아카이브로)
 //   node scripts/tasks.mjs edit <id> --key value ...   (같은 플래그로 수정)
 //   node scripts/tasks.mjs list
@@ -258,6 +260,14 @@ function esc(s) {
   return escapeAnglesOutsideCode(String(s ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' '));
 }
 
+// 메모 칸 앞에 주제와 다시 열린 횟수를 붙인다(표 칸을 늘리지 않는다 — 미러·다른 도구가 칸 수에 기대므로).
+function memoCell(t) {
+  const marks = [];
+  if (t.reopens?.length) marks.push(`🔁 다시 열림 ${t.reopens.length}회(${t.reopens.at(-1).reason})`);
+  if (t.topic) marks.push(`주제: ${t.topic}`);
+  return [...marks, t.memo].filter(Boolean).join(' · ');
+}
+
 function rowExtra(t) {
   if (t.action === 'planning') return t.due || '';
   if (t.action === 'waiting') return t.wait || '';
@@ -298,19 +308,19 @@ function render(db) {
       L.push(`| id | 할일 | 담당 | 긴급 | 중요 | 출처 | 생성 | ${extraCol} | 메모 |`);
       L.push('|----|------|------|------|------|------|------|------|------|');
       for (const t of items)
-        L.push(`| ${t.id} | ${esc(t.title)} | ${ownerCell(t)} | ${urgCell(t)} | ${impCell(t)} | ${esc(t.source)} | ${t.created} | ${esc(rowExtra(t))} | ${esc(t.memo)} |`);
+        L.push(`| ${t.id} | ${esc(t.title)} | ${ownerCell(t)} | ${urgCell(t)} | ${impCell(t)} | ${esc(t.source)} | ${t.created} | ${esc(rowExtra(t))} | ${esc(memoCell(t))} |`);
     } else {
       L.push('| id | 할일 | 담당 | 긴급 | 중요 | 출처 | 생성 | 메모 |');
       L.push('|----|------|------|------|------|------|------|------|');
       for (const t of items)
-        L.push(`| ${t.id} | ${esc(t.title)} | ${ownerCell(t)} | ${urgCell(t)} | ${impCell(t)} | ${esc(t.source)} | ${t.created} | ${esc(t.memo)} |`);
+        L.push(`| ${t.id} | ${esc(t.title)} | ${ownerCell(t)} | ${urgCell(t)} | ${impCell(t)} | ${esc(t.source)} | ${t.created} | ${esc(memoCell(t))} |`);
     }
     L.push('');
   }
   fs.writeFileSync(MD, L.join('\n') + '\n');
-  const D = ['# {{PROJECT_NAME}} 할일 — 완료 아카이브', '', '| id | 할일 | 담당 | 출처 | 생성 | 완료 |', '|----|------|------|------|------|------|'];
+  const D = ['# {{PROJECT_NAME}} 할일 — 완료 아카이브', '', '| id | 할일 | 담당 | 출처 | 생성 | 완료 | 근거 |', '|----|------|------|------|------|------|------|'];
   for (const t of db.done)
-    D.push(`| ${t.id} | ${esc(t.title)} | ${ownerCell(t)} | ${esc(t.source)} | ${t.created} | ${t.doneAt} |`);
+    D.push(`| ${t.id} | ${esc(t.title)} | ${ownerCell(t)} | ${esc(t.source)} | ${t.created} | ${t.doneAt} | ${esc([t.evidence || '—', t.reopens?.length ? `🔁 다시 열린 적 ${t.reopens.length}회` : ''].filter(Boolean).join(' · '))} |`);
   // 취소는 완료와 섞지 않는다 — 섞으면 "결과를 얻었다"는 완료 기록이 거짓이 된다(GTD의 휴지통에 해당).
   if (db.dropped.length) {
     D.push('', '## 취소 아카이브  (이유가 사라져 하지 않기로 한 할일)', '', '| id | 할일 | 담당 | 출처 | 생성 | 취소 | 이유 |', '|----|------|------|------|------|------|------|');
@@ -334,7 +344,7 @@ function reviewText(db) {
   const dump = (label, arr) => {
     if (!arr.length) return;
     L.push(`\n[${label}] ${arr.length}건`);
-    for (const x of arr) L.push(`  ${x.id} ${x.title} — ${ownerCell(x)} 긴급 ${urgCell(x)} · 중요 ${impCell(x)} (출처: ${x.source}${x.due ? ', 예정 ' + x.due : ''}${x.wait ? ', 대기: ' + x.wait : ''})`);
+    for (const x of arr) L.push(`  ${x.id} ${x.title} — ${ownerCell(x)} 긴급 ${urgCell(x)} · 중요 ${impCell(x)} (출처: ${x.source}${x.due ? ', 예정 ' + x.due : ''}${x.wait ? ', 대기: ' + x.wait : ''}${x.topic ? ', 주제: ' + x.topic : ''}${x.reopens?.length ? `, 🔁 다시 열림 ${x.reopens.length}회` : ''})`);
   };
   dump('기한 지남', overdue);
   dump('오늘 예정', dueToday);
@@ -355,7 +365,7 @@ const OWNER_KEYS = Object.keys(OWNER);
 const URG_KEYS = Object.keys(URG);
 const IMP_KEYS = Object.keys(IMP);
 const ACTION_KEYS = BUCKETS.map((b) => b.key);
-const EDIT_KEYS = ['title', 'owner', 'action', 'urgency', 'importance', 'source', 'due', 'wait', 'memo'];
+const EDIT_KEYS = ['title', 'owner', 'action', 'urgency', 'importance', 'source', 'due', 'wait', 'memo', 'topic'];
 
 function findOpen(db, id) {
   const t = db.open.find((x) => x.id === id);
@@ -372,7 +382,7 @@ function edited(t, f) {
     if (t.action === 'planning' && f.due === undefined) next.due = null;
     if (t.action === 'waiting' && f.wait === undefined) next.wait = null;
   }
-  for (const k of ['due', 'wait', 'importance']) if (next[k] === '') next[k] = null;
+  for (const k of ['due', 'wait', 'importance', 'topic']) if (next[k] === '') next[k] = null;
   return next;
 }
 
@@ -390,6 +400,7 @@ function main() {
       importance: f.importance || null, // 선택 필드(긴급과 별개 축)
       source: f.source, created: today(),
       due: f.due || null, wait: f.wait || null, memo: f.memo || '',
+      ...(f.topic ? { topic: f.topic } : {}),
     };
     assertValid(task, 'add');
     withLock(DATA, () => {
@@ -402,13 +413,18 @@ function main() {
     });
   } else if (cmd === 'done') {
     const id = rest[0];
-    if (!id) fail('필수: done <id>');
+    const f = parseFlags(rest.slice(1));
+    // 근거 없는 완료는 나중에 "정말 끝났나?"를 되짚을 수 없고, 다시 생긴 문제를 "완료"라는 기록만 믿고
+    // 지나치게 만든다(낡은 완료 믿기). 결정: D-주제흐름-다시.
+    if (!id || id.startsWith('--')) fail('필수: done <id> --evidence "<근거>"');
+    if (isBlank(f.evidence)) fail(`완료 거부: 근거가 없습니다 — ${id}`, '고치는 법: --evidence "<무엇으로 끝났다고 봤는지 — 테스트 이름·커밋·파일·worklog #N>"을 붙인다. 확인하지 못했으면 --evidence "미확인"');
     findOpen(load(), id);
     withLock(DATA, () => {
       const db = load();
       const t = findOpen(db, id);
       db.open.splice(db.open.indexOf(t), 1);
       t.doneAt = today();
+      t.evidence = f.evidence;
       db.done.push(t);
       persistData(db);
       render(db);
@@ -430,6 +446,40 @@ function main() {
       persistData(db);
       render(db);
       console.log(`취소 ${id} ${t.title} — ${f.reason}`);
+    });
+  } else if (cmd === 'reopen') {
+    // 완료·취소한 할일이 다시 필요해졌다(재발·번복·재작업). 새 할일로 따로 만들면 "예전에 끝냈다"는 기록과
+    // 끊겨 같은 일이 두 번 닫히는 줄 모른다 — 같은 ID를 되살리고 이력(언제 무엇을 근거로 닫았는지)을 남긴다.
+    const id = rest[0];
+    const f = parseFlags(rest.slice(1));
+    if (!id || id.startsWith('--') || isBlank(f.reason)) fail('필수: reopen <id> --reason "<다시 여는 까닭>" [--action next|planning|waiting|someday]');
+    if (f.action !== undefined) validateEnum('action', f.action, ACTION_KEYS);
+    const closedOf = (db) => {
+      const done = db.done.find((x) => x.id === id);
+      if (done) return { list: db.done, t: done, from: 'done' };
+      const dropped = db.dropped.find((x) => x.id === id);
+      if (dropped) return { list: db.dropped, t: dropped, from: 'dropped' };
+      if (db.open.some((x) => x.id === id)) fail(`이미 열린 할일입니다: ${id}`);
+      return fail(`없음: ${id} — 완료·취소 아카이브(tasks-done.md)의 ID를 확인하세요.`);
+    };
+    const reopened = (closed) => {
+      const { doneAt, evidence, droppedAt, reason, ...rest2 } = closed.t;
+      const record = { at: today(), reason: f.reason, from: closed.from, ...(doneAt ? { doneAt } : {}), ...(evidence ? { evidence } : {}), ...(droppedAt ? { droppedAt, droppedReason: reason } : {}) };
+      const next = edited(rest2, { ...f, action: f.action || 'next' });
+      next.reopens = [...(closed.t.reopens || []), record];
+      return next;
+    };
+    assertValid(reopened(closedOf(load())), 'reopen');
+    withLock(DATA, () => {
+      const db = load();
+      const closed = closedOf(db);
+      const next = reopened(closed);
+      assertValid(next, 'reopen');
+      closed.list.splice(closed.list.indexOf(closed.t), 1);
+      db.open.push(next);
+      persistData(db);
+      render(db);
+      console.log(`다시 열림 ${id} [${next.action}] ${next.title} — ${f.reason} (다시 열린 횟수 ${next.reopens.length})`);
     });
   } else if (cmd === 'edit') {
     const id = rest[0];
@@ -480,7 +530,7 @@ function main() {
     console.log(`  고치는 법: ${PLANNING_FIX}\n           ${WAITING_FIX}`);
     return 1;
   } else {
-    console.log('명령: init | add | done <id> | drop <id> --reason | edit <id> | list | review | check');
+    console.log('명령: init | add | done <id> --evidence | drop <id> --reason | reopen <id> --reason | edit <id> | list | review | check');
   }
   return 0;
 }

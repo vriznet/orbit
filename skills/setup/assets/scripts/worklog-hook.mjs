@@ -5,6 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { FIX_CLAIM } from './topic-lib.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const WORKLOG = path.join(ROOT, 'scripts', 'worklog.mjs');
@@ -178,6 +179,7 @@ function normalizeState(previous, input) {
     entry: Number.isFinite(Number(previous?.entry)) && previous?.entry !== null ? Number(previous.entry) : null,
     entryPromptIds: Array.isArray(previous?.entryPromptIds) ? previous.entryPromptIds : [],
     foundNudged: previous?.foundNudged ?? null,
+    verifyNudged: previous?.verifyNudged ?? null,
   };
 }
 
@@ -613,6 +615,28 @@ function foundNudge(input, state, promptId) {
   return { entry, tools };
 }
 
+// ── '확인' 칸 알림 ───────────────────────────────────────────────────────────────
+// 결과에 "고쳤다·해결했다"가 있거나 '다시' 항목인데 '- 확인:' 줄이 없으면 한 번 알린다. 무엇으로 확인했는지
+// 없는 완료 기록은 다음 세션이 그대로 믿고 지나가게 만든다(낡은 완료 믿기). 확인하지 못했으면 "미확인"이라고
+// 남기게 해 그 사실 자체를 기록한다. 턴당 한 번(stop_hook_active·verifyNudged). 끄기: ORBIT_VERIFY_NUDGE=off.
+// 결정: D-주제흐름-다시.
+function verifyNudge(input, state, promptId) {
+  if (['off', '0', 'false', 'no'].includes(String(process.env.ORBIT_VERIFY_NUDGE ?? 'on').toLowerCase())) return null;
+  if (input.stop_hook_active || !promptId) return null;
+  const entry = state.entry;
+  if (entry === null || !state.entryPromptIds.includes(promptId) || state.verifyNudged === entry) return null;
+  const block = worklogBlock(entry);
+  if (!block || /^- 확인:/m.test(block)) return null;
+  const result = (block.match(/^- 결과: (.*)$/m) || [])[1] || '';
+  const again = /^- 다시:/m.test(block);
+  if (!again && !FIX_CLAIM.test(result)) return null;
+  withStateLock(input, () => {
+    const { state: current, error } = readStateRaw(input);
+    if (!error) writeState(input, { ...normalizeState(current, input), verifyNudged: entry });
+  });
+  return { entry, again };
+}
+
 function decideStop(input, promptId) {
   const { exists, state, error } = readStateRaw(input);
   if (!exists) return { kind: 'none' }; // 이번 세션에 begin이 한 번도 없었다 — 조용히 통과
@@ -676,12 +700,11 @@ function handleStop(input) {
   if (decision.kind === 'idle') {
     flushOrphans(workingState.sessionId, workingState.orphans);
     const nudge = foundNudge(input, workingState, promptId);
-    if (nudge) {
-      process.stdout.write(JSON.stringify({
-        decision: 'block',
-        reason: `도구를 ${nudge.tools}번 쓴 턴인데 worklog #${nudge.entry}에 '발견'이 없습니다. 이번 턴에 알아낸 것(원인·제약·동작 방식)을 한 줄 남기세요. 없으면 "없음"이라고 적습니다:\nnode scripts/worklog.mjs found claude ${nudge.entry} "<발견>"`,
-      }));
-    }
+    const verify = verifyNudge(input, workingState, promptId);
+    const reasons = [];
+    if (nudge) reasons.push(`도구를 ${nudge.tools}번 쓴 턴인데 worklog #${nudge.entry}에 '발견'이 없습니다. 이번 턴에 알아낸 것(원인·제약·동작 방식)을 한 줄 남기세요. 없으면 "없음"이라고 적습니다:\nnode scripts/worklog.mjs found claude ${nudge.entry} "<발견>"`);
+    if (verify) reasons.push(`worklog #${verify.entry}에 ${verify.again ? "'다시' 항목인데" : '고쳤다·해결했다고 적었는데'} 무엇으로 확인했는지('확인')가 없습니다. 재현·테스트·실행 결과를 한 줄 남기세요. 확인하지 못했으면 "미확인"이라고 적습니다(다음 세션이 이 완료 기록을 그대로 믿지 않게):\nnode scripts/worklog.mjs verified claude ${verify.entry} "<확인 방법과 결과>"`);
+    if (reasons.length) process.stdout.write(JSON.stringify({ decision: 'block', reason: reasons.join('\n\n') }));
     return;
   }
 
