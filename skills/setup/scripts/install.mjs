@@ -155,6 +155,9 @@ function signature(value) {
 // 남아 있는 배선을 소유로 알아봐야 update가 연결을 정리한다.
 const HARNESS_HANDLER_COMMAND_RE = /^(node "\$CLAUDE_PROJECT_DIR\/scripts\/(worklog|worklog-hook|wiki-hook|memory-hook|git-guard)\.mjs" |bash "\$CLAUDE_PROJECT_DIR\/\.claude\/skills\/continuous-learning-v2\/hooks\/observe\.sh" )/;
 
+// 0.2.18부터 Claude 턴 시작 catchup은 밀린 일지 표시가 있을 때만 node를 부르는 셸 조건으로 시작한다.
+const HARNESS_GATED_CATCHUP_RE = /^g="\$CLAUDE_PROJECT_DIR\/\.git"; .*worklog-pending\/claude.*node "\$CLAUDE_PROJECT_DIR\/scripts\/worklog\.mjs" catchup /;
+
 function collectHandlerSignatures(hooksSpec) {
   const signatures = new Set();
   for (const groups of Object.values(hooksSpec.hooks || {})) {
@@ -175,7 +178,7 @@ function isHarnessOwnedHandler(handler, manifestSignatures, incomingSignatures) 
   if (handler.type !== 'command' || handler.command !== 'bash') return false;
   if (!Array.isArray(handler.args) || handler.args[0] !== '-c') return false;
   const arg1 = handler.args[1];
-  return typeof arg1 === 'string' && HARNESS_HANDLER_COMMAND_RE.test(arg1);
+  return typeof arg1 === 'string' && (HARNESS_HANDLER_COMMAND_RE.test(arg1) || HARNESS_GATED_CATCHUP_RE.test(arg1));
 }
 
 // 이벤트별로 (a) 기존 그룹들 안의 하네스 소유 핸들러를 제거(빈 그룹은 삭제),

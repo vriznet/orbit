@@ -32,6 +32,11 @@ const STATE = path.join(ROOT, '{{DOCS_DIR}}', 'worklog-state.json');
 // 작성자 이름: claude·codex 말고도 같은 저장소를 쓰는 다른 에이전트(hermes, opencode 등)가
 // 제 이름으로 적게 한다. 예전엔 둘만 받아 다른 에이전트가 claude로 적었다. 책갈피도 이름별이다.
 const AGENT_NAME = /^[a-z][a-z0-9-]{0,31}$/;
+// 밀린 일지 표시: 다른 작성자가 일지를 쓰면 .git/orbit-state/worklog-pending/<작성자>를 만들고,
+// 그 작성자가 catchup하면 지운다. Claude의 턴 시작 훅은 이 파일이 있을 때만 catchup을 부른다.
+// Claude 세션끼리는 claude 책갈피 하나를 같이 써서 따라잡을 것이 생기지 않으므로, 표시 없이
+// 매 턴 책갈피를 읽던 조회를 없앤다. git 저장소가 아니면 표시를 못 만들고, 훅은 예전처럼 늘 부른다.
+const PENDING_ALWAYS = ['claude'];
 
 // 동시 실행(파일 잠금)과 손상 파일 감지에 쓰는 최소 헬퍼. 외부 의존성 없이 fs만 쓴다.
 function sleepSync(ms) {
@@ -237,8 +242,13 @@ function append(agent, ask, result, extra = {}) {
       `## [#${n}] ${today()} · ${agent} · with:user\n- 물음: ${sanitizeLogText(ask)}\n- 결과: ${sanitizeLogText(result)}\n${optional}\n`
     );
     s.next = n + 1;
-    s.bookmarks[agent] = n; // 자기가 쓴 것은 읽은 것으로 본다
+    // 자기가 쓴 것은 읽은 것으로 본다. 다만 책갈피가 바로 앞 번호일 때만 옮긴다 — 사이에 다른
+    // 작성자가 쓴 턴이 있으면 책갈피를 그대로 둬, 다음 catchup이 그 턴(과 자기 턴)을 보여 주게 한다.
+    if ((s.bookmarks[agent] ?? 0) === n - 1) s.bookmarks[agent] = n;
     saveState(s);
+    for (const other of new Set([...Object.keys(s.bookmarks), ...PENDING_ALWAYS])) {
+      if (other !== agent) markPending(other);
+    }
     const since = n - s.lastSummarized; // 마지막 요약 이후 쌓인 턴 수
     process.stdout.write(
       since >= 3 ? `기록됨 [#${n}]. 이제 최근 ${since}턴을 요약할 때입니다.\n` : `기록됨 [#${n}].\n`
@@ -368,12 +378,40 @@ function summary(agent, text) {
   });
 }
 
+function pendingFile(agent) {
+  try {
+    const gitPath = execFileSync('git', ['rev-parse', '--git-path', `orbit-state/worklog-pending/${agent}`], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return gitPath ? path.resolve(ROOT, gitPath) : null;
+  } catch {
+    return null; // git 저장소가 아니다 — 표시 없이 지낸다
+  }
+}
+
+function markPending(agent) {
+  const file = pendingFile(agent);
+  if (!file) return;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '');
+  } catch {}
+}
+
+function clearPending(agent) {
+  const file = pendingFile(agent);
+  if (file) fs.rmSync(file, { force: true });
+}
+
 function catchup(agent) {
   ensureLog();
   withLock(STATE, () => {
     const s = loadState();
     const mark = s.bookmarks[agent] ?? 0;
     const latest = s.next - 1;
+    clearPending(agent);
     if (latest <= mark) return; // 밀린 게 없으면 조용히 끝낸다
 
     const sm = s.lastSummarized;

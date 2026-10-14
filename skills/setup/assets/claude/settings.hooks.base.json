@@ -38,7 +38,7 @@
             "command": "bash",
             "args": [
               "-c",
-              "node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" catchup claude"
+              "g=\"$CLAUDE_PROJECT_DIR/.git\"; if [ -f \"$g\" ]; then read -r _ g < \"$g\"; case \"$g\" in /*) ;; *) g=\"$CLAUDE_PROJECT_DIR/$g\" ;; esac; fi; if [ -d \"$g\" ] && [ ! -e \"$g/orbit-state/worklog-pending/claude\" ]; then exit 0; fi; node \"$CLAUDE_PROJECT_DIR/scripts/worklog.mjs\" catchup claude"
             ],
             "timeout": 10
           }

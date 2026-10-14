@@ -2396,6 +2396,75 @@ NODE
 echo "${S71_OUT}"
 [ "${S71_RC}" = "0" ] || fail "시나리오 71 하위 항목 실패(위 ❌ 확인)"
 
+echo ""
+echo "== 시나리오 72: Claude 턴 시작 catchup은 밀린 일지 표시가 있을 때만(0.2.18) =="
+R72="$WORK/scenario72"
+new_repo "$R72"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R72" --project-name "Scenario72" --slug scenario72 --mode new --codex >/dev/null 2>&1
+(cd "$R72" && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init)
+S72_OUT="$(cd "$R72" && node - "$R72" <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const repo = process.argv[2];
+let failed = 0;
+const ok = (cond, label) => { console.log(`  ${cond ? '✅' : '❌'} ${label}`); if (!cond) failed = 1; };
+const settings = JSON.parse(fs.readFileSync(path.join(repo, '.claude/settings.json'), 'utf8'));
+const hookCmd = settings.hooks.UserPromptSubmit.flatMap((g) => g.hooks).map((h) => h.args?.[1] || '').find((c) => c.includes('catchup claude'));
+ok(Boolean(hookCmd) && hookCmd.includes('worklog-pending/claude'), '설치된 catchup 훅이 표시 파일을 먼저 본다');
+const hook = (dir) => spawnSync('bash', ['-c', hookCmd], { cwd: dir, env: { ...process.env, CLAUDE_PROJECT_DIR: dir }, encoding: 'utf8' });
+const wl = (dir, ...args) => spawnSync(process.execPath, ['scripts/worklog.mjs', ...args], { cwd: dir, encoding: 'utf8' });
+const marker = (dir, agent) => path.resolve(dir, spawnSync('git', ['rev-parse', '--git-path', `orbit-state/worklog-pending/${agent}`], { cwd: dir, encoding: 'utf8' }).stdout.trim());
+const stateFile = path.join(repo, 'scenario72-docs/worklog-state.json');
+
+// Claude 세션끼리만 쓸 때: 표시가 없어 node를 아예 부르지 않는다(상태 파일이 깨져도 조용)
+wl(repo, 'append', 'claude', 'C1', 'r'); wl(repo, 'append', 'claude', 'C2', 'r');
+ok(!fs.existsSync(marker(repo, 'claude')), 'Claude끼리 쓰면 claude 표시가 생기지 않음');
+ok(fs.existsSync(marker(repo, 'codex')), 'Claude가 쓰면 codex 표시가 생김');
+const saved = fs.readFileSync(stateFile, 'utf8');
+fs.writeFileSync(stateFile, '{broken');
+const quiet = hook(repo);
+ok(quiet.status === 0 && quiet.stdout === '' && quiet.stderr === '', '표시가 없으면 책갈피를 읽지 않고 끝남(깨진 상태 파일에도 조용)');
+fs.writeFileSync(stateFile, saved);
+
+// Claude → Codex: codex-catchup이 Claude 턴을 받고 codex 표시를 지운다
+const cu = wl(repo, 'catchup', 'codex');
+ok(cu.stdout.includes('C1') && cu.stdout.includes('C2'), 'Codex가 Claude 턴을 따라잡음');
+ok(!fs.existsSync(marker(repo, 'codex')), 'Codex 따라잡기 뒤 codex 표시 지움');
+
+// Codex → Claude: Codex가 쓰면 표시가 생기고, 다음 Claude 턴 시작 훅이 그 턴을 넣는다
+wl(repo, 'append', 'codex', 'X1', 'r');
+ok(fs.existsSync(marker(repo, 'claude')), 'Codex가 쓰면 claude 표시가 생김');
+const got = hook(repo);
+ok(got.stdout.includes('X1'), 'Claude 턴 시작 훅이 Codex 턴을 넣음');
+ok(!fs.existsSync(marker(repo, 'claude')), '넣은 뒤 claude 표시 지움');
+ok(hook(repo).stdout === '', '다음 턴은 다시 조용');
+
+// Codex가 Claude 턴 도중에 쓰고 Claude가 이어서 기록해도 Codex 턴을 놓치지 않는다
+wl(repo, 'append', 'codex', 'X2', 'r');
+wl(repo, 'append', 'claude', 'C3', 'r');
+const late = hook(repo);
+ok(late.stdout.includes('X2'), 'Claude 기록이 Codex 턴을 건너뛰지 않음');
+
+// 워크트리: 표시는 워크트리마다 따로, 훅이 .git 파일을 따라간다
+const wt = path.join(path.dirname(repo), 'scenario72-wt');
+spawnSync('git', ['add', '-A'], { cwd: repo });
+spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'h'], { cwd: repo });
+spawnSync('git', ['worktree', 'add', '-q', wt], { cwd: repo });
+ok(hook(wt).stdout === '', '워크트리: 표시 없으면 조용');
+wl(wt, 'append', 'codex', 'W1', 'r');
+ok(fs.existsSync(marker(wt, 'claude')) && !fs.existsSync(marker(repo, 'claude')), '워크트리 표시는 그 워크트리에만');
+ok(hook(wt).stdout.includes('W1'), '워크트리: Codex 턴을 넣음');
+
+// git 저장소가 아니면 예전처럼 늘 catchup을 부른다
+const plain = path.join(path.dirname(repo), 'scenario72-plain');
+fs.cpSync(repo, plain, { recursive: true, filter: (src) => !src.includes(`${path.sep}.git`) });
+wl(plain, 'append', 'codex', 'P1', 'r');
+ok(hook(plain).stdout.includes('P1'), 'git이 아니면 표시 없이도 catchup을 부름');
+process.exit(failed ? 1 : 0);
+NODE
+)"; S72_RC=$?
+echo "${S72_OUT}"
+[ "${S72_RC}" = "0" ] || fail "시나리오 72 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0
