@@ -2412,8 +2412,10 @@ ok(bash('b', 'git push').includes('"deny"'), '다른 세션의 허락은 넘어�
 ok(bash('a', 'node scripts/worklog.mjs append claude "물음" "ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 을 설명"') === '' && bash('a', 'echo ORBIT_ALLOW_WORKLOG_ONLY_COMMIT') === '', '따옴표 안이나 값 없는 변수 이름은 세지 않음');
 ok(guard('pre-tool', { session_id: 'a', tool_name: 'Read', tool_input: {} }).stdout === '', 'Bash가 아니면 조용');
 // 허용 변수는 실제로 붙여 실행할 때만, 이 저장소를 커밋할 때만 본다(heredoc 본문·다른 저장소 커밋은 상관없음)
-ok(bash('a', "cat > note.md <<'EOF'\nORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x\ngit push\nEOF\ngit status") === '', 'heredoc 본문의 변수·푸시 글은 세지 않음');
-ok(bash('a', 'cd /tmp/other-repo && ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x') === '' && bash('a', 'ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git -C /tmp/other-repo commit -m x') === '', '다른 저장소 커밋의 허용 변수는 이 저장소 허락과 상관없음');
+ok(bash('a', "cat > note.md <<'EOF'\nORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x\ngit push\nEOF") === '', '파일 쓰기 heredoc 하나뿐인 명령의 본문 글은 세지 않음');
+const otherRepo = fs.mkdtempSync(path.join(require('os').tmpdir(), 'orbit-other-'));
+ok(bash('a', `cd ${otherRepo} && ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x`) === '' && bash('a', `ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git -C ${otherRepo} commit -m x`) === '', '실제로 있는 다른 저장소 커밋의 허용 변수는 이 저장소 허락과 상관없음');
+ok(bash('a', 'cd /no/such/dir && ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x').includes('"deny"'), '풀 수 없는 경로는 이 저장소로 봄(막음)');
 ok(bash('a', 'env ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x').includes('"deny"') && bash('a', 'cd . && ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x').includes('"deny"'), 'env·cd . 뒤에 붙인 허용 변수는 여전히 거절');
 process.exit(failed ? 1 : 0);
 NODE
@@ -2715,6 +2717,13 @@ ok(pre('/tmp', `cd -- ${ROOT} && ${V}=1 git commit -m x`).includes('"deny"') && 
 const link = path.join(ROOT, '..', 's74-repo-link');
 fs.rmSync(link, { force: true }); fs.symlinkSync(ROOT, link);
 ok(pre(link, `${V}=1 git commit -m x`).includes('"deny"'), '저장소를 가리키는 링크 경로의 cwd도 이 저장소로 봄');
+// Codex 4차: 조건문 출력·문자열 속 예시 heredoc, command·builtin cd, git -C 링크/..
+ok(gbash("if true; then\ntee note.md <<'EOF'\ngit push\nEOF\nfi | bash").includes('"deny"') && gbash(`printf '%s\\n' "example:\ncat > note.md <<'EOF'\n"\ngit push`).includes('"deny"'), '명령 전체가 파일 쓰기 하나가 아니면 heredoc 본문도 검사');
+const other4 = fs.mkdtempSync(path.join(require('os').tmpdir(), 'orbit-o4-'));
+ok(pre(other4, `command cd ${ROOT} && ${V}=1 git commit -m x`).includes('"deny"') && pre(other4, `builtin cd ${ROOT} && ${V}=1 git commit -m x`).includes('"deny"'), 'command·builtin cd 같은 다른 꼴은 면제하지 않음');
+fs.mkdirSync('child2', { recursive: true }); fs.symlinkSync(path.join(ROOT, 'child2'), path.join(other4, 'lnk'));
+ok(pre(other4, `${V}=1 git -C lnk/.. commit -m x`).includes('"deny"'), 'git -C 링크/.. 는 링크를 따라간 뒤 .. (이 저장소)');
+ok(pre(other4, `${V}=1 git commit -m x`) === '', '실제 다른 저장소 폴더에서 한 커밋은 면제');
 
 // ORBIT_HOOKS=off면 훅이 부르는 catchup·recent도 조용하고, 남의 밀린 표시를 지우지 않는다
 append('동료 결과', 'r');

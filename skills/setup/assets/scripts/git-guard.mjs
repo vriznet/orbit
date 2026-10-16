@@ -117,25 +117,19 @@ function outsideQuotes(line, index) {
   return stripQuoted(line.slice(0, index)).replace(/''|""/g, '').match(/['"]/) === null;
 }
 
-// 파일에 글을 쓰는 heredoc 본문만 뺀다. 단순한 파일 쓰기로 확정될 때만이다: 구분자에 따옴표가 있고(본문이 펼쳐지지
-// 않음), 그 줄 전체가 `cat <<'EOF' > 파일` 또는 `tee [옵션] 파일 <<'EOF'` 꼴이며(파이프·;·&·줄 이음 없음), 앞 줄이
-// 역슬래시로 이어지지 않고, 명령 전체에 묶음({ }·( ))이 없을 때. 하나라도 확실하지 않으면 본문을 명령으로 본다.
+// 파일에 글을 쓰는 heredoc 본문만 뺀다. 명령 **전체**가 단순한 파일 쓰기 heredoc 하나일 때만이다:
+// 첫 줄이 `cat <<'EOF' > 파일` · `cat > 파일 <<'EOF'` · `tee [-a] 파일 <<'EOF' [>/dev/null]` 꼴이고(구분자에 따옴표),
+// 끝 구분자 뒤에 다른 명령이 없을 때. 그 밖의 꼴(다른 명령과 섞임, 조건문·묶음·파이프, 문자열 속 예시)은 본문도 명령으로 본다.
 const FILE_WRITE = /^\s*(?:cat\s*<<-?\s*(['"])([A-Za-z_][\w-]*)\1\s*>>?\s*[^\s|;&<>]+|cat\s*>>?\s*[^\s|;&<>]+\s*<<-?\s*(['"])([A-Za-z_][\w-]*)\3|tee(?:\s+-a)?\s+[^\s|;&<>-][^\s|;&<>]*\s*<<-?\s*(['"])([A-Za-z_][\w-]*)\5(?:\s*>\s*\/dev\/null)?)\s*$/;
 export function stripHeredocs(command) {
   const raw = String(command || '');
-  if (/[{}()]/.test(stripQuoted(raw).replace(/\$\{[^}]*\}/g, ''))) return raw;
-  const lines = raw.split('\n');
-  const out = [];
-  let end = null;
-  let continued = false;
-  for (const line of lines) {
-    if (end !== null) { if (line.replace(/^\t+/, '') === end) end = null; continue; }
-    out.push(line);
-    const match = !continued && FILE_WRITE.exec(line);
-    continued = /\\\s*$/.test(line);
-    if (match) end = match[2] || match[4] || match[6];
-  }
-  return out.join('\n');
+  const lines = raw.replace(/\n+$/, '').split('\n');
+  const match = FILE_WRITE.exec(lines[0]);
+  if (!match) return raw;
+  const end = match[2] || match[4] || match[6];
+  const close = lines.findIndex((line, index) => index > 0 && line.replace(/^\t+/, '') === end);
+  if (close !== lines.length - 1) return raw; // 구분자 뒤에 다른 줄이 있거나 닫히지 않음
+  return lines[0];
 }
 
 // 명령을 이어 붙인 조각으로 나눈다(앞 조각과의 이음표를 함께). 하위 셸·명령 치환이 있으면 null — 그때는 보수적으로 본다.
@@ -181,31 +175,33 @@ function inside(root, target) {
   return t === base || t.startsWith(`${base}${path.sep}`);
 }
 
-// 허용 변수가 이 저장소의 명령에 붙었는지. 다른 저장소를 가리키는 명령(그 조각의 git -C <경로>, 또는 &&로 끊김 없이
-// 이어진 cd들로 정해진 작업 폴더)에만 붙었으면 이 저장소의 허락과 상관없다. 상대 경로는 그때까지 확정한 작업 폴더에서
-// 계산한다. 작업 폴더를 확실히 모르면(따옴표 경로·하위 셸·export·&& 아닌 이음 뒤의 cd) 이 저장소로 본다.
+// 경로를 셸·git과 같은 방식으로 푼다: 정리(..)하지 않은 채 OS realpath로(링크를 먼저 따라간 뒤 ..). 없으면 null.
+function realFrom(from, p) {
+  if (!from || !p || /^(''|"")$/.test(p)) return null;
+  const raw = p.startsWith('/') ? p : p.startsWith('~/') || p === '~' ? `${process.env.HOME || ''}${p.slice(1)}` : `${from}/${p}`;
+  try { return fs.realpathSync.native(raw); } catch { return null; } // native: OS가 링크를 먼저 따라간 뒤 .. 를 푼다
+}
+
+// 허용 변수가 이 저장소의 명령에 붙었는지. 다른 저장소 면제는 확실히 해석되는 두 꼴에만 준다:
+//   VAR=1 git [-C <경로>] …            (한 조각, 시작 폴더는 훅 입력 cwd)
+//   cd <경로> && VAR=1 git [-C <경로>] …  (옵션 없는 cd 하나 + 그 조각)
+// 그 밖의 꼴(다른 조각이 더 있음, 하위 셸, export, 경로를 풀 수 없음)은 이 저장소로 본다(막음).
 export function allowEnvForThisRepo(command, root = ROOT, start = root) {
   if (!usesAllowEnv(command)) return false;
   const parts = segments(command);
   if (!parts || exported().test(stripQuoted(stripHeredocs(command)))) return true;
-  const resolve = (p, from) => (from && p && !/^(''|"")$/.test(p) ? path.resolve(from, p.replace(/^~(?=\/|$)/, process.env.HOME || '~')) : null);
-  let cwd = path.resolve(start);
-  let moved = false; // 이 줄기에서 cd로 작업 폴더를 바꿨는지
-  for (const part of parts) {
-    if (moved && part.sep !== '&&') { cwd = null; moved = false; }
-    if (/^\s*(?:cd|pushd|popd)\b/.test(part.text)) {
-      // 옵션 없는 `cd <경로>`만 해석한다. cd -P·cd --·pushd·popd 등은 작업 폴더를 '모름'으로 둔다.
-      const cd = /^\s*cd\s+([^\s-]\S*)\s*$/.exec(part.text);
-      cwd = cd ? resolve(cd[1], cwd) : null;
-      moved = true;
-      continue;
-    }
-    if (!assignAny().test(part.text)) continue;
-    const dashC = /\bgit\s+(?:-c\s+\S+\s+)*-C\s+(\S+)/.exec(part.text);
-    const target = dashC ? resolve(dashC[1], cwd) : cwd;
-    if (!target || inside(root, target)) return true;
+  let cwd = realFrom(path.resolve(start), '.');
+  let rest = parts;
+  if (parts.length === 2 && parts[1].sep === '&&') {
+    const cd = /^\s*cd\s+([^\s-]\S*)\s*$/.exec(parts[0].text);
+    if (!cd) return true;
+    cwd = realFrom(cwd, cd[1]);
+    rest = [parts[1]];
   }
-  return false;
+  if (rest.length !== 1 || !assignAny().test(rest[0].text) || !/^\s*(?:[A-Za-z_]\w*=\S*\s+)*git\b/.test(rest[0].text)) return true;
+  const dashC = /^\s*(?:[A-Za-z_]\w*=\S*\s+)*git\s+(?:-c\s+\S+\s+)*-C\s+(\S+)/.exec(rest[0].text);
+  const target = dashC ? realFrom(cwd, dashC[1]) : cwd;
+  return !target || inside(root, target);
 }
 
 export function isPush(command) {
