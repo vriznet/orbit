@@ -2707,6 +2707,14 @@ fs.mkdirSync('child', { recursive: true });
 ok(gbash(`cd child && ${V}=1 git -C .. commit -m x`).includes('"deny"') && gbash(`cd child && cd .. && ${V}=1 git commit -m x`).includes('"deny"'), 'cd 뒤 상대 경로는 바뀐 작업 폴더에서 계산(이 저장소로 돌아옴)');
 ok(gbash(`NODE_ENV=test env ${V}=1 git commit -m x`).includes('"deny"') && gbash(`env NODE_ENV=test env ${V}=1 git commit -m x`).includes('"deny"'), '대입·env가 섞인 앞붙이 뒤의 허용 변수도 잡음');
 ok(guard('pre-tool', { session_id: 'gg', tool_name: 'Bash', cwd: '/tmp', tool_input: { command: `${V}=1 git commit -m x` } }).stdout === '', '도구가 다른 폴더에서 돌면 그 커밋은 이 저장소 허락과 상관없음');
+// Codex 3차: 이어 쓴 파이프·묶음 heredoc, 옵션 있는 cd, 같은 저장소의 다른 경로 표기
+ok(gbash("cat <<'EOF' \\\n| bash\ngit push\nEOF").includes('"deny"') && gbash("{\ncat <<'EOF'\ngit push\nEOF\n} | bash").includes('"deny"'), '줄 이음·묶음으로 셸에 넘기는 heredoc 본문은 명령으로 봄');
+ok(gbash("cat > note.md <<'EOF'\ngit push\nEOF") === '' && gbash("tee note.md <<'EOF' >/dev/null\ngit push\nEOF") === '', '단순한 파일 쓰기 heredoc 본문은 세지 않음');
+const pre = (cwd, command) => guard('pre-tool', { session_id: 'gg', tool_name: 'Bash', cwd, tool_input: { command } }).stdout;
+ok(pre('/tmp', `cd -- ${ROOT} && ${V}=1 git commit -m x`).includes('"deny"') && pre('/tmp', `cd -P ${ROOT} && ${V}=1 git commit -m x`).includes('"deny"'), '옵션 있는 cd는 작업 폴더를 모름으로(막음)');
+const link = path.join(ROOT, '..', 's74-repo-link');
+fs.rmSync(link, { force: true }); fs.symlinkSync(ROOT, link);
+ok(pre(link, `${V}=1 git commit -m x`).includes('"deny"'), '저장소를 가리키는 링크 경로의 cwd도 이 저장소로 봄');
 
 // ORBIT_HOOKS=off면 훅이 부르는 catchup·recent도 조용하고, 남의 밀린 표시를 지우지 않는다
 append('동료 결과', 'r');

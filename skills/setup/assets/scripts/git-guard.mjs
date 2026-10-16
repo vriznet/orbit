@@ -117,21 +117,23 @@ function outsideQuotes(line, index) {
   return stripQuoted(line.slice(0, index)).replace(/''|""/g, '').match(/['"]/) === null;
 }
 
-// 파일에 글을 쓰는 heredoc 본문만 뺀다: 구분자를 따옴표로 감싸(<<'EOF') 본문이 펼쳐지지 않고, 그 줄의 명령이
-// cat·tee이며, 그 줄에 파이프·명령 치환이 없는 경우다(cat <<'EOF' | bash 는 본문이 실행된다).
-// 따옴표 없는 구분자(본문의 $(…)가 실행됨)나 bash·sh 등에 넘기는 heredoc은 명령으로 본다.
+// 파일에 글을 쓰는 heredoc 본문만 뺀다. 단순한 파일 쓰기로 확정될 때만이다: 구분자에 따옴표가 있고(본문이 펼쳐지지
+// 않음), 그 줄 전체가 `cat <<'EOF' > 파일` 또는 `tee [옵션] 파일 <<'EOF'` 꼴이며(파이프·;·&·줄 이음 없음), 앞 줄이
+// 역슬래시로 이어지지 않고, 명령 전체에 묶음({ }·( ))이 없을 때. 하나라도 확실하지 않으면 본문을 명령으로 본다.
+const FILE_WRITE = /^\s*(?:cat\s*<<-?\s*(['"])([A-Za-z_][\w-]*)\1\s*>>?\s*[^\s|;&<>]+|cat\s*>>?\s*[^\s|;&<>]+\s*<<-?\s*(['"])([A-Za-z_][\w-]*)\3|tee(?:\s+-a)?\s+[^\s|;&<>-][^\s|;&<>]*\s*<<-?\s*(['"])([A-Za-z_][\w-]*)\5(?:\s*>\s*\/dev\/null)?)\s*$/;
 export function stripHeredocs(command) {
-  const lines = String(command || '').split('\n');
+  const raw = String(command || '');
+  if (/[{}()]/.test(stripQuoted(raw).replace(/\$\{[^}]*\}/g, ''))) return raw;
+  const lines = raw.split('\n');
   const out = [];
   let end = null;
+  let continued = false;
   for (const line of lines) {
     if (end !== null) { if (line.replace(/^\t+/, '') === end) end = null; continue; }
     out.push(line);
-    const match = /<<-?\s*(['"])([A-Za-z_][\w-]*)\1/.exec(line);
-    if (!match || !outsideQuotes(line, match.index)) continue;
-    const bare = stripQuoted(line);
-    const head = stripQuoted(line.slice(0, match.index)).split(/[;&|(]/).at(-1).trim();
-    if (/^(?:cat|tee)\b/.test(head) && !/\||\$\(|`/.test(bare)) end = match[2];
+    const match = !continued && FILE_WRITE.exec(line);
+    continued = /\\\s*$/.test(line);
+    if (match) end = match[2] || match[4] || match[6];
   }
   return out.join('\n');
 }
@@ -160,9 +162,23 @@ export function usesAllowEnv(command) {
   return assignAny().test(stripQuoted(stripHeredocs(command)));
 }
 
+// 같은 폴더의 다른 표기(심볼릭 링크, /var와 /private/var)를 같게 본다. 없는 경로는 있는 조상까지 풀어 붙인다.
+function real(p) {
+  let current = path.resolve(p);
+  const rest = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync(current), ...rest); } catch {}
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(p);
+    rest.unshift(path.basename(current));
+    current = parent;
+  }
+}
+
 function inside(root, target) {
-  const base = path.resolve(root);
-  return target === base || target.startsWith(`${base}${path.sep}`);
+  const base = real(root);
+  const t = real(target);
+  return t === base || t.startsWith(`${base}${path.sep}`);
 }
 
 // 허용 변수가 이 저장소의 명령에 붙었는지. 다른 저장소를 가리키는 명령(그 조각의 git -C <경로>, 또는 &&로 끊김 없이
@@ -177,8 +193,13 @@ export function allowEnvForThisRepo(command, root = ROOT, start = root) {
   let moved = false; // 이 줄기에서 cd로 작업 폴더를 바꿨는지
   for (const part of parts) {
     if (moved && part.sep !== '&&') { cwd = null; moved = false; }
-    const cd = /^\s*cd\s+(\S+)\s*$/.exec(part.text);
-    if (cd) { cwd = resolve(cd[1], cwd); moved = true; continue; }
+    if (/^\s*(?:cd|pushd|popd)\b/.test(part.text)) {
+      // 옵션 없는 `cd <경로>`만 해석한다. cd -P·cd --·pushd·popd 등은 작업 폴더를 '모름'으로 둔다.
+      const cd = /^\s*cd\s+([^\s-]\S*)\s*$/.exec(part.text);
+      cwd = cd ? resolve(cd[1], cwd) : null;
+      moved = true;
+      continue;
+    }
     if (!assignAny().test(part.text)) continue;
     const dashC = /\bgit\s+(?:-c\s+\S+\s+)*-C\s+(\S+)/.exec(part.text);
     const target = dashC ? resolve(dashC[1], cwd) : cwd;
