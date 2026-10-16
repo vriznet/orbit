@@ -25,6 +25,7 @@ orbit:setup의 `install.mjs update`에 있고, 이 스킬은 그것을 호출해
    node "${CLAUDE_SKILL_DIR}/../setup/scripts/install.mjs" update --repo "$PWD"
    ```
 
+   "이 설치기(…)는 저장소에 깔린 판(…)보다 낮아 실행하지 않습니다"로 멈추면, 이 세션이 플러그인 갱신 전에 시작돼 옛 판 스킬을 쓰고 있는 것이다. 메시지의 "새 판 설치기" 명령을 그대로 실행한다(없으면 새 세션에서 다시 부르라고 알린다). `--allow-downgrade`는 사용자가 되돌리라고 한 때만 붙인다.
 3. 출력 JSON(summary)을 읽어 사용자에게 쉬운 말로 보고한다.
    - `files.update`·`files.create`: 갱신·생성된 파일 수.
    - `files.conflict`: **사용자가 직접 수정해 보존된 파일**이다(어느 파일인지 `conflicts`

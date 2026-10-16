@@ -313,7 +313,23 @@ function lastLoggedTurn() {
   }
 }
 
+// 다른 Claude 세션이 보낸 메시지(세션 간 대화). 사람 입력이 아니므로 새 사용자 턴을 열지 않고 알림처럼 묶어 기록한다
+// (회신이 올 때마다 사용자 턴이 하나씩 늘던 문제). git-guard·again-hook도 같은 입력을 사람 입력에서 뺀다.
+const CROSS_SESSION_BLOCK = /<cross-session-message\b([^>]*)>([\s\S]*?)<\/cross-session-message>/g;
+function parseCrossSession(prompt) {
+  const blocks = [...prompt.matchAll(CROSS_SESSION_BLOCK)];
+  if (!blocks.length) return null;
+  const rest = prompt.replace(CROSS_SESSION_BLOCK, '').replace(/^\s*Another Claude session sent a message[^\n]*\n?/i, '').trim();
+  if (rest) return null;
+  return blocks.map(([, attrs, body]) => {
+    const from = (attrs.match(/from-name="([^"]*)"/) || [])[1] || '다른 세션';
+    const first = String(body).trim().split('\n')[0];
+    return { status: '세션 간 메시지', summary: compact(`${from}: ${first}`, 160), result: compact(shortenTempPaths(body), 200) };
+  });
+}
+
 function parseNotifications(prompt) {
+  if (typeof prompt === 'string' && prompt.includes('<cross-session-message')) return parseCrossSession(prompt);
   if (typeof prompt !== 'string' || !prompt.includes('<task-notification>')) return null;
   const bodies = [...prompt.matchAll(NOTICE_BLOCK)].map((match) => match[1]);
   if (!bodies.length || prompt.replace(NOTICE_BLOCK, '').trim()) return null;
@@ -350,7 +366,7 @@ function appendNoticeBundle(input, notices) {
     const result = compact(notice.result, count === 1 ? 200 : 80);
     return result ? `${notice.status}: ${result}` : notice.status;
   });
-  const result = `사용자 턴 사이에 도착한 백그라운드 작업 알림을 훅이 묶어 기록함 — ${details.join(' / ')}`;
+  const result = `사용자 턴 사이에 도착한 알림(백그라운드 작업·다른 세션의 메시지)을 훅이 묶어 기록함 — ${details.join(' / ')}`;
   const appended = spawnSync(process.execPath, [
     WORKLOG,
     'append',

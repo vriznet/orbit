@@ -2730,6 +2730,13 @@ ok(pre(ROOT, `${V}=1 git -C ${other4} -C ${ROOT} commit -m x`).includes('"deny"'
 fs.mkdirSync(path.join(other4, 'kid'), { recursive: true }); fs.symlinkSync(path.join(other4, 'kid'), path.join(ROOT, 'out-link'));
 ok(pre(ROOT, `cd out-link/.. && ${V}=1 git commit -m x`).includes('"deny"'), '셸 cd는 논리 경로(링크/.. → 원래 폴더)로 계산');
 fs.unlinkSync(path.join(ROOT, 'out-link'));
+// 세션 간 메시지는 새 사용자 턴이 아니라 알림 묶음으로 기록
+const cs = hook('begin', { session_id: 'cs1', prompt: '<cross-session-message from="uds:/tmp/x.sock" from-name="tail" from-mode="bypass">\ntail: 이미 0.2.20입니다.\n</cross-session-message>', prompt_id: 'CS1' });
+ok(cs.stdout === '' || !/아직 worklog에 기록되지 않았습니다/.test(cs.stdout), '세션 간 메시지는 사용자 턴을 열지 않음');
+const csStop = hook('stop', { session_id: 'cs1', prompt_id: 'CS1' });
+ok(!/기록되지 않았습니다/.test(csStop.stdout), '세션 간 메시지에 답한 턴은 기록을 강제하지 않음');
+const csUser = hook('begin', { session_id: 'cs1', prompt: '이어서 사용자 요청', prompt_id: 'CS2' });
+ok(/이번 사용자 턴\(#1\)/.test(csUser.stdout), '그 뒤 사람 입력이 첫 사용자 턴(#1)');
 // Codex 6차: 단독 & 뒤의 이 저장소 커밋
 ok(pre(ROOT, `${V}=1 git -C ${other4} commit -m o & ${V}=1 git commit -m local`).includes('"deny"'), '단독 & 로 이은 이 저장소 커밋은 면제하지 않음');
 
@@ -2784,6 +2791,17 @@ NODE
 S74_OUT="$(cd "$R74" && node "$WORK/scenario74.cjs")"; S74_RC=$?
 echo "${S74_OUT}"
 [ "${S74_RC}" = "0" ] || fail "시나리오 74 하위 항목 실패(위 ❌ 확인)"
+# 판 낮춤 막기: 저장소에 깔린 판보다 낮은 설치기로는 update하지 않는다
+R74D="$WORK/scenario74d"
+new_repo "$R74D"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R74D" --project-name "S74D" --slug s74d --mode new >/dev/null 2>&1
+python3 - "$R74D/.claude/orbit-manifest.json" <<'PY'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d['skillVersion']='9.9.9'; json.dump(d,open(p,'w'))
+PY
+DOWN_OUT="$(node "$SKILL_DIR/scripts/install.mjs" update --repo "$R74D" 2>&1)"; DOWN_RC=$?
+[ "$DOWN_RC" != "0" ] && echo "$DOWN_OUT" | grep -q "보다 낮아 실행하지 않습니다" && pass "낮은 판 설치기는 update를 거부" || fail "판 낮춤 거부 안 됨(rc=$DOWN_RC)"
+node "$SKILL_DIR/scripts/install.mjs" update --repo "$R74D" --allow-downgrade >/dev/null 2>&1 && pass "--allow-downgrade면 진행" || fail "--allow-downgrade 실패"
 
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."

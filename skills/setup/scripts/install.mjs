@@ -24,7 +24,7 @@ function parseArgs(argv) {
     action, codex: false, reviewers: false,
     'no-githooks': false, 'keep-existing-scripts': false,
   };
-  const booleans = new Set(['codex', 'reviewers', 'no-githooks', 'keep-existing-scripts']);
+  const booleans = new Set(['codex', 'reviewers', 'no-githooks', 'keep-existing-scripts', 'allow-downgrade']);
   // 값을 받는 옵션도 이름을 정해 둔다 — 모르는 옵션을 값 옵션으로 받아들이면 뒤따르는
   // 플래그를 값으로 삼켜 버린다(예: `--unknown --codex`에서 --codex가 사라짐).
   const valued = new Set(['repo', 'project-name', 'slug', 'mode']);
@@ -381,6 +381,28 @@ if (options.action === 'update') {
     const pkg = readJsonBestEffort(path.join(repo, 'package.json'));
     options['project-name'] = manifest.projectName || (pkg && pkg.name) || manifest.slug;
   }
+}
+
+// 판 낮춤 막기 — 저장소에 깔린 판보다 낮은 설치기로는 바꾸지 않는다. 플러그인을 갱신하기 전에 시작한 세션의
+// /orbit:update는 그 세션이 읽어 둔 옛 캐시 판의 설치기를 부른다(실측: 0.2.20 저장소에서 0.2.16 세션이 update를 부를 뻔함).
+// 같은 플러그인 캐시에 더 새 판이 있으면 그 설치기 경로를 알려 준다. 정말 되돌리려면 --allow-downgrade.
+function compareVersions(a, b) {
+  const pa = String(a).split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = String(b).split('.').map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0) ? -1 : 1;
+  }
+  return 0;
+}
+if (manifest?.skillVersion && skillVersion !== '0.0.0' && !options['allow-downgrade'] && compareVersions(skillVersion, manifest.skillVersion) < 0) {
+  let hint = '';
+  try {
+    const versionsDir = path.resolve(SKILL_ROOT, '..', '..', '..');
+    const newer = fs.readdirSync(versionsDir).filter((v) => /^\d+(\.\d+)*$/.test(v) && compareVersions(v, manifest.skillVersion) >= 0).sort(compareVersions).at(-1);
+    const candidate = newer && path.join(versionsDir, newer, 'skills', 'setup', 'scripts', 'install.mjs');
+    if (candidate && fs.existsSync(candidate)) hint = ` 새 판 설치기: node "${candidate}" ${options.action} --repo "${repo}"`;
+  } catch {}
+  die(`이 설치기(${skillVersion})는 저장소에 깔린 판(${manifest.skillVersion})보다 낮아 실행하지 않습니다 — 옛 판으로 되돌리지 않기 위함입니다. 플러그인을 갱신한 뒤 새 세션에서 다시 부르세요.${hint} 정말 되돌리려면 --allow-downgrade.`);
 }
 
 // upgrade에서 이전 설치의 모듈 구성을 승계한다(F2) — 유효 모듈 = 매니페스트 modules ∪ CLI
