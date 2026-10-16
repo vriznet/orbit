@@ -753,6 +753,15 @@ if (!AGENT_NAME.test(agent || '')) {
   process.stderr.write('작성자는 영문 소문자로 시작하는 이름이어야 합니다(예: claude, codex, hermes).\n');
   process.exit(1);
 }
+// AI가 대안 중 하나를 고른 턴(--decision)은 사용자 말에 결정 표현이 없어 ADR 1단계 훅(adr-hook)이 못 잡는다 —
+// 그래서 기록할 때 같은 2·3단계 체크리스트를 보여 준다. adr-lib이 없는 옛 설치에서는 조용히 넘어간다.
+async function adrChecklist() {
+  try {
+    const { CHECKLIST } = await import('./adr-lib.mjs');
+    process.stdout.write(`[orbit ADR] 판단 칸(--decision)이 있습니다 — 이 결정에 ADR 2·3단계를 적용하세요.\n${CHECKLIST}\n`);
+  } catch { /* adr-lib 없음 */ }
+}
+
 if (cmd === 'append') {
   const topics = splitTopics(sanitizeLogText(topicText ?? ''));
   if (againKind && !topics.length) {
@@ -762,6 +771,7 @@ if (cmd === 'append') {
   const n = append(agent, a ?? '', b ?? '', { why: whyText, found: foundText, topics, again: againKind, verified: verifiedText });
   completeHookTurn(hookSessionId, hookTurnToken, hookTurnId, n);
   topicHints(topics, n, againKind);
+  if (decisionText) await adrChecklist();
   if (commitMsg !== null) gitCommitAll(commitMsg);
 } else if (cmd === 'found') {
   found(a, b ?? '');

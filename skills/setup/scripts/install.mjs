@@ -153,7 +153,7 @@ function signature(value) {
 // 비앵커 위치에 담은 사용자 훅"은 여전히 절대 걸리지 않는다.
 // observe.sh 갈래는 예전 버전이 선택 모듈로 심던 자동 학습 훅이다. 지금은 설치하지 않지만,
 // 남아 있는 배선을 소유로 알아봐야 update가 연결을 정리한다.
-const HARNESS_HANDLER_COMMAND_RE = /^(node "\$CLAUDE_PROJECT_DIR\/scripts\/(worklog|worklog-hook|wiki-hook|memory-hook|git-guard|again-hook)\.mjs" |bash "\$CLAUDE_PROJECT_DIR\/\.claude\/skills\/continuous-learning-v2\/hooks\/observe\.sh" )/;
+const HARNESS_HANDLER_COMMAND_RE = /^(node "\$CLAUDE_PROJECT_DIR\/scripts\/(worklog|worklog-hook|wiki-hook|memory-hook|git-guard|again-hook|adr-hook)\.mjs" |bash "\$CLAUDE_PROJECT_DIR\/\.claude\/skills\/continuous-learning-v2\/hooks\/observe\.sh" )/;
 
 // 0.2.18부터 Claude 턴 시작 catchup은 밀린 일지 표시가 있을 때만 node를 부르는 셸 조건으로 시작한다.
 const HARNESS_GATED_CATCHUP_RE = /^g="\$CLAUDE_PROJECT_DIR\/\.git"; .*worklog-pending\/claude.*node "\$CLAUDE_PROJECT_DIR\/scripts\/worklog\.mjs" catchup /;
@@ -573,6 +573,8 @@ const directAssets = [
   ['scripts/git-guard.mjs', path.join(repo, 'scripts/git-guard.mjs'), null],
   ['scripts/topic-lib.mjs', path.join(repo, 'scripts/topic-lib.mjs'), null],
   ['scripts/again-hook.mjs', path.join(repo, 'scripts/again-hook.mjs'), null],
+  ['scripts/adr-lib.mjs', path.join(repo, 'scripts/adr-lib.mjs'), null],
+  ['scripts/adr-hook.mjs', path.join(repo, 'scripts/adr-hook.mjs'), null],
 ];
 
 if (!options['no-githooks']) {

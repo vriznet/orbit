@@ -43,6 +43,8 @@ export const SWITCHES = [
     about: '이 줄 수가 넘는 코드 파일을 범위 없이 읽으면 개요를 먼저 보여 준다' },
   { name: 'again', env: 'ORBIT_AGAIN', fallback: 'on', normalize: onOff, values: 'on|off',
     about: "사용자 입력이 예전 일의 번복·재발·재요청·재작업이면 Haiku가 판단해 그 주제의 흐름을 넣는다(신호 낱말이 든 입력만, 그때 약 3초)" },
+  { name: 'adr-gate', env: 'ORBIT_ADR_GATE', fallback: 'on', normalize: onOff, values: 'on|off',
+    about: "사용자 입력에 결정 선언이 있는지 Jev가 판단해(약 0.2초, TYPESAFE_API_KEY 필요) 있을 때만 ADR 2·3단계 체크리스트를 넣는다" },
   { name: 'verify-nudge', env: 'ORBIT_VERIFY_NUDGE', fallback: 'on', normalize: onOff, values: 'on|off',
     about: "worklog 결과에 '고쳤다·해결했다'가 있는데 확인 칸이 없으면 종료 훅이 한 번 알린다" },
   { name: 'agent-policy', env: 'ORBIT_AGENT_POLICY', fallback: 'off', normalize: onOff, values: 'on|off',

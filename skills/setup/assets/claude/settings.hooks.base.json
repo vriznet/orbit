@@ -64,6 +64,19 @@
             "command": "bash",
             "args": [
               "-c",
+              "node \"$CLAUDE_PROJECT_DIR/scripts/adr-hook.mjs\""
+            ],
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "-c",
               "node \"$CLAUDE_PROJECT_DIR/scripts/worklog-hook.mjs\" begin"
             ],
             "timeout": 10

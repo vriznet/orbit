@@ -55,6 +55,8 @@
 | `worklog-hook.mjs` | 세션·턴 상태 훅. 매 턴 일지 미기록을 감지하고 종료를 막는다(begin/stop). 도구를 많이 쓴 턴에 '발견' 칸이 비면, 결과에 '고쳤다·해결했다'가 있거나 '다시' 항목인데 '확인' 칸이 비면 한 번 알린다. |
 | `topic-lib.mjs` | 주제 흐름 공용 모듈(모델 없음): worklog 항목과 할일의 주제를 묶어 한 줄 상태와 흐름을 만든다. 색인 파일 없이 worklog.md·tasks.json에서 그때그때 만든다. |
 | `again-hook.mjs` | '다시' 감지 훅(UserPromptSubmit): 신호 낱말·주제 이름이 든 입력만 Haiku가 번복·재발·재요청·재작업인지 판단하고, 맞으면 그 주제의 흐름(또는 기억 검색 상위)을 넣는다. 판단용 claude는 설정·훅·도구 없이 따로 띄운다. 끄기 `ORBIT_AGAIN=off`. 같은 폴더에 `again-monitor.mjs`가 있으면 판단마다 기록을 넘긴다(측정을 붙이는 자리). |
+| `adr-hook.mjs` | ADR 감지 1단계 훅(UserPromptSubmit): 사용자 말 한 문장에 결정 선언이 있는지 TypeSafe Jev(`jev-1.13.0`, noul 한 질문)에게 묻고, 점수가 문턱(기본 0.5, `ORBIT_ADR_GATE_THRESHOLD`) 이상이면 2·3단계 체크리스트를 넣는다. 키는 `TYPESAFE_API_KEY` 또는 `~/.config/orbit/typesafe.env`, 없으면 쉰다. 판정마다 `.git/orbit-state/adr-gate.jsonl`에 점수·시간·주입 여부(입력 글은 남기지 않음). 끄기 `ORBIT_ADR_GATE=off`. |
+| `adr-lib.mjs` | ADR 감지의 1단계 판정 질문과 2·3단계 체크리스트 글. `adr-hook`과 `worklog.mjs append --decision`이 같이 쓴다. |
 | `memory-hook.mjs` | 기억 훅: precompact(상태 파일), compact-restore(SessionStart compact 주입). 상태 파일의 '마지막 답변'은 턴 중간의 컴팩션일 때만 넣는다(턴이 끝난 상태면 Claude Code가 그 답변을 원문으로 남긴다), postcompact(요약 저장), turn-start(git 지문), stop(대화 글 사본·도구 색인), pre-tool(파일별 기억 목록·이어진 주제의 상태·큰 파일 개요 안내). |
 | `memory-lib.mjs` | 기억 훅 공용: 세션 기록 파서, 상태 폴더, 잠금, git 지문, 저장소 상대 경로, 기억 번호. |
 | `memory.mjs` | 기억 CLI: `search`(ADR·위키·worklog·대화 사본·도구 활동, 번호 목록), `show <번호>`, `forget <문구> [--apply]`(/forget 스킬이 부름). |

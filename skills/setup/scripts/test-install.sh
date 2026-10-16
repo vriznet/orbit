@@ -2803,6 +2803,66 @@ DOWN_OUT="$(node "$SKILL_DIR/scripts/install.mjs" update --repo "$R74D" 2>&1)"; 
 [ "$DOWN_RC" != "0" ] && echo "$DOWN_OUT" | grep -q "보다 낮아 실행하지 않습니다" && pass "낮은 판 설치기는 update를 거부" || fail "판 낮춤 거부 안 됨(rc=$DOWN_RC)"
 node "$SKILL_DIR/scripts/install.mjs" update --repo "$R74D" --allow-downgrade >/dev/null 2>&1 && pass "--allow-downgrade면 진행" || fail "--allow-downgrade 실패"
 
+echo ""
+echo "== 시나리오 75: ADR 감지 3단계 — Jev 1단계 훅(adr-hook), --decision 체크리스트, 규칙·템플릿(0.2.22) =="
+R75="$WORK/scenario75"
+new_repo "$R75"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R75" --project-name "Scenario75" --slug scenario75 --mode new >/dev/null 2>&1
+node "$SKILL_DIR/scripts/config.mjs" show --repo "$R75" --json 2>/dev/null | grep -q 'ORBIT_ADR_GATE"' && pass "설정에 adr-gate 스위치" || fail "adr-gate 스위치 없음"
+S75_OUT="$(cd "$R75" && node - <<'NODE'
+const fs = require('fs'); const path = require('path'); const os = require('os'); const { spawn, spawnSync } = require('child_process');
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+(async () => {
+  ok(fs.existsSync('scripts/adr-hook.mjs') && fs.existsSync('scripts/adr-lib.mjs'), '새 스크립트 설치(adr-hook·adr-lib)');
+  const settings = JSON.parse(fs.readFileSync('.claude/settings.json', 'utf8'));
+  ok(settings.hooks.UserPromptSubmit.flatMap((g) => g.hooks).some((h) => (h.args?.[1] || '').includes('scripts/adr-hook.mjs')), 'UserPromptSubmit에 ADR 1단계 훅');
+  const claudeMd = fs.readFileSync('CLAUDE.md', 'utf8');
+  ok(claudeMd.includes('adr-hook') && claudeMd.includes('이걸 ADR로 남길까요?') && claudeMd.includes('스스로 ADR을 만들지 않는다'), 'CLAUDE.md: 훅이 거르고 묻기만 함');
+  const rules = fs.readFileSync('scenario75-docs/rules.md', 'utf8');
+  ok(rules.includes('1단계 — 결정인가') && rules.includes('3단계 — 앞으로 다른 작업에도') && rules.includes('결정 테스트와 주석') && !rules.includes('근거의 비자명성'), 'rules.md: 3단계 기준·결정 테스트, 옛 2게이트 없음');
+  ok(fs.readFileSync('scenario75-docs/templates/adr.md', 'utf8').includes('## 지키는 테스트'), 'ADR 템플릿에 지키는 테스트 칸');
+  // --decision 기록 → 체크리스트, 없으면 안 보임
+  const wl = (...a) => spawnSync(process.execPath, ['scripts/worklog.mjs', ...a], { encoding: 'utf8' });
+  ok(wl('append', 'claude', '물음', '결과', '--decision', 'SQLite / 버린 것: JSON / 근거: 2만 건').stdout.includes('3단계 — 앞으로 다른 작업에도 적용되나'), '--decision 기록 뒤 2·3단계 체크리스트');
+  ok(!wl('append', 'claude', '물음', '결과').stdout.includes('3단계'), '--decision 없으면 체크리스트 없음');
+  // 가짜 Jev(다른 프로세스) — 'stub-high'가 든 말은 0.9, 아니면 0.1, 'stub-500'은 500 응답
+  const stubFile = path.join(os.tmpdir(), `adr-stub-${process.pid}.mjs`);
+  fs.writeFileSync(stubFile, `import http from 'node:http'; import fs from 'node:fs';
+const srv = http.createServer((q, r) => { let b = ''; q.on('data', (c) => b += c); q.on('end', () => { fs.appendFileSync(process.argv[2], q.headers.authorization + '\\t' + b + '\\n'); const j = JSON.parse(b); const m = j.state.user_message;
+  if (m.includes('stub-500')) { r.writeHead(500); r.end('x'); return; }
+  r.writeHead(200, { 'Content-Type': 'application/json' }); r.end(JSON.stringify({ model: 'jev-1.13.0', answers: { decision: { type: 'noul', noul: m.includes('stub-high') ? 0.9 : 0.1 } } })); }); });
+srv.listen(0, () => console.log(srv.address().port));`);
+  const reqLog = path.join(os.tmpdir(), `adr-stub-${process.pid}.log`);
+  const stub = spawn(process.execPath, [stubFile, reqLog], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const port = await new Promise((res) => stub.stdout.once('data', (d) => res(String(d).trim())));
+  const env = { ...process.env, ORBIT_ADR_GATE_ENDPOINT: `http://127.0.0.1:${port}/v1/systemone`, TYPESAFE_API_KEY: 'test-key', XDG_CONFIG_HOME: path.join(os.tmpdir(), 'none') };
+  const hook = (prompt, extra = {}) => spawnSync(process.execPath, ['scripts/adr-hook.mjs'], { input: JSON.stringify({ session_id: 's75', prompt }), encoding: 'utf8', env: { ...env, ...extra } });
+  const ctx = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput.additionalContext; } catch { return ''; } };
+  const hi = hook('앞으로 로그는 stdout으로만 하자 stub-high');
+  ok(ctx(hi).includes('[orbit ADR 1단계]') && ctx(hi).includes('이걸 ADR로 남길까요?') && ctx(hi).includes('스스로 만들지 않고'), '결정 선언(0.9) → 2·3단계 체크리스트 주입, ADR은 묻기만');
+  ok(hook('포트를 4310으로 해 줘').stdout === '', '결정 아님(0.1) → 주입 없음');
+  ok(hook('앞으로 하자 stub-high', { ORBIT_ADR_GATE_THRESHOLD: '0.95' }).stdout === '', '문턱(ORBIT_ADR_GATE_THRESHOLD) 적용');
+  ok(hook('앞으로 하자 stub-high', { ORBIT_ADR_GATE: 'off' }).stdout === '', 'ORBIT_ADR_GATE=off면 쉼');
+  ok(hook('<task-notification>앞으로 하자 stub-high').stdout === '', '사람 입력이 아니면 묻지 않음');
+  const e500 = hook('앞으로 하자 stub-500');
+  ok(e500.status === 0 && e500.stdout === '' && e500.stderr.includes('Jev 응답 500'), 'Jev 오류는 조용히 지나감(입력 막지 않음)');
+  const before = fs.readFileSync(reqLog, 'utf8').split('\n').filter(Boolean).length;
+  ok(hook('앞으로 하자 stub-high', { TYPESAFE_API_KEY: '' }).stdout === '' && fs.readFileSync(reqLog, 'utf8').split('\n').filter(Boolean).length === before, '키가 없으면 Jev를 부르지 않음');
+  const cfg = path.join(os.tmpdir(), `adr-xdg-${process.pid}`); fs.mkdirSync(path.join(cfg, 'orbit'), { recursive: true });
+  fs.writeFileSync(path.join(cfg, 'orbit', 'typesafe.env'), 'TYPESAFE_API_KEY=file-key\n');
+  ok(ctx(hook('앞으로 하자 stub-high', { TYPESAFE_API_KEY: '', XDG_CONFIG_HOME: cfg })) !== '' && fs.readFileSync(reqLog, 'utf8').includes('Bearer file-key'), '~/.config/orbit/typesafe.env의 키를 씀');
+  const sent = JSON.parse(fs.readFileSync(reqLog, 'utf8').split('\n')[0].split('\t')[1]);
+  ok(sent.model === 'jev-1.13.0' && sent.questions.decision.type === 'noul' && sent.questions.decision.instructions.includes('오늘은 여기까지 하자'), 'Jev 요청: 판 고정·noul 한 질문(6판)');
+  const gateLog = fs.readFileSync(spawnSync('git', ['rev-parse', '--git-path', 'orbit-state/adr-gate.jsonl'], { encoding: 'utf8' }).stdout.trim(), 'utf8');
+  ok(gateLog.includes('"injected":true') && !gateLog.includes('stdout으로만') && !gateLog.includes('test-key'), '판정 기록에 점수·주입 여부만(입력 글·키 없음)');
+  stub.kill(); fs.rmSync(stubFile); fs.rmSync(reqLog); fs.rmSync(cfg, { recursive: true });
+  process.exit(failed ? 1 : 0);
+})();
+NODE
+)"; S75_RC=$?
+echo "${S75_OUT}"
+[ "${S75_RC}" = "0" ] || fail "시나리오 75 하위 항목 실패(위 ❌ 확인)"
+
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."
   exit 0
