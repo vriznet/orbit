@@ -736,7 +736,16 @@ function gitCommitAll(msg) {
   }
   let head = '';
   try { head = git(['rev-parse', '--short', 'HEAD']).trim(); } catch {}
-  process.stdout.write(`커밋 결과: ${head} 만듦 — 커밋 훅(.githooks/pre-commit)을 통과함\n`);
+  // 훅이 실제로 돌았는지는 git이 쓰는 훅 폴더(core.hooksPath 반영)에 실행 가능한 pre-commit이 있는지로만 말한다.
+  let hook = null;
+  try {
+    const file = path.resolve(ROOT, git(['rev-parse', '--git-path', 'hooks/pre-commit']).trim());
+    fs.accessSync(file, fs.constants.X_OK);
+    hook = path.relative(ROOT, file) || file;
+  } catch {}
+  process.stdout.write(hook
+    ? `커밋 결과: ${head} 만듦 — 커밋 훅(${hook})이 돌았고 통과함\n`
+    : `커밋 결과: ${head} 만듦 — 실행 가능한 커밋 훅이 없어 커밋 전 검사(테스트 등)는 돌지 않음\n`);
 }
 
 const [cmd, agent, a, b] = argv;
@@ -767,6 +776,8 @@ if (cmd === 'append') {
 else if (cmd === 'thread') threadCommand(a, jsonFlag); else if (cmd === 'summary') {
   summary(agent, a ?? '');
   if (commitMsg !== null) gitCommitAll(commitMsg);
+} else if ((cmd === 'catchup' || cmd === 'recent') && String(process.env.ORBIT_HOOKS || '').toLowerCase() === 'off') {
+  // 보조용 claude -p(ORBIT_HOOKS=off)에서 훅이 부르는 따라잡기·최근 일지를 끈다 — 남의 밀린 표시를 대신 지우지 않게.
 } else if (cmd === 'catchup') catchup(agent);
 else if (cmd === 'recent') recent(recentMode, recentLimit);
 else {

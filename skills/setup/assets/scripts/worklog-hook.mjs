@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { claimsFix } from './topic-lib.mjs';
+import { isHumanPrompt, isNotification, textOf } from './memory-lib.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const WORKLOG = path.join(ROOT, 'scripts', 'worklog.mjs');
@@ -428,6 +429,19 @@ function beginNotification(input, state, notices, promptId) {
   return {};
 }
 
+// 미룬 알림 중 아직 비어 있는 칸만 안내 줄로 만든다(그사이 채웠으면 빼서, 이미 있는 칸을 또 채우라고 하지 않는다).
+function stillMissing(deferred) {
+  const out = [];
+  for (const item of deferred) {
+    if (!item || typeof item !== 'object' || !Number.isFinite(Number(item.entry))) continue;
+    const block = worklogBlock(Number(item.entry));
+    if (!block) continue;
+    if (item.kind === 'found' && !/^- 발견:/m.test(block)) out.push(`- worklog #${item.entry} '발견': node scripts/worklog.mjs found claude ${item.entry} "<발견 또는 없음>"`);
+    if (item.kind === 'verified' && !/^- 확인:/m.test(block)) out.push(`- worklog #${item.entry} '확인': node scripts/worklog.mjs verified claude ${item.entry} "<확인 방법과 결과 또는 미확인>"`);
+  }
+  return out;
+}
+
 // 사용자 입력: 턴을 열고 기록을 강제한다.
 // - 진행 중인 턴과 같은 prompt_id(작업 중 보낸 추가 메시지, 한 도착분에 begin이 여러 번 도는 경우)
 //   → 새 턴을 열지 않고 같은 토큰을 다시 알린다.
@@ -468,8 +482,9 @@ function beginUser(input, state, promptId) {
   const mergedNote = previous
     ? `\n앞 턴(#${previous.turn})이 기록되지 않은 채 끝나(중단 등) 이 턴에 합쳤습니다. 두 입력을 함께 요약해 위 명령으로 한 번만 기록하세요.`
     : '';
-  const deferredNote = deferred.length
-    ? `\n\n지난 턴 기록에서 빠진 칸이 있습니다(자동 실행이라 그 턴 끝에서 막지 않고 미뤘습니다). 이번 턴 기록 전에 채우세요:\n${deferred.join('\n')}`
+  const still = stillMissing(deferred);
+  const deferredNote = still.length
+    ? `\n\n지난 턴 기록에서 빠진 칸이 있습니다(자동 실행이라 그 턴 끝에서 막지 않고 미뤘습니다). 이번 턴 기록 전에 채우세요:\n${still.join('\n')}`
     : '';
   plan.context = `이번 사용자 턴(#${counter})은 아직 worklog에 기록되지 않았습니다. 최종 답변 전에 다음 형식으로 실제 물음과 결과를 요약해 실행하세요:\n${appendCommand(next.sessionId, token)}${mergedNote}\n명령이 성공하기 전에는 최종 답변을 보내지 않습니다.${deferredNote}`;
   return plan;
@@ -605,11 +620,9 @@ function worklogBlock(entry) {
 // 이번 턴의 도구 사용 수: 세션 기록에서 그 턴의 prompt_id가 붙은 도구 결과(tool_result)를 센다.
 // (assistant 항목에는 prompt_id가 없고, 도구 결과를 담은 user 항목에는 있다.)
 // 마지막 사람 입력 뒤의 것만 센다 — 이어 받은 세션(--resume)에서 앞 턴들의 도구까지 199번으로 센 일이 있었다(r1 M1).
+// 사람 입력 판별은 대화 사본과 같은 기준(memory-lib)을 쓰고, 작업 완료 알림도 뺀다.
 function isHumanEntry(entry) {
-  if (entry?.type !== 'user' || entry.isMeta || entry.message?.role !== 'user') return false;
-  const content = entry.message.content;
-  if (typeof content === 'string') return true;
-  return Array.isArray(content) && content.some((part) => part?.type === 'text') && !content.some((part) => part?.type === 'tool_result');
+  return isHumanPrompt(entry) && !isNotification(textOf(entry).trim());
 }
 
 function countTurnTools(transcriptPath, promptIds) {
@@ -739,8 +752,8 @@ function handleStop(input) {
     if (isHeadless()) {
       // 자동 실행: 막으면 기록 글이 답을 가린다. 다음 사용자 턴 안내로 미룬다(한 번만 — nudged 표시는 위에서 남겼다).
       const lines = [];
-      if (nudge) lines.push(`- worklog #${nudge.entry} '발견': node scripts/worklog.mjs found claude ${nudge.entry} "<발견 또는 없음>"`);
-      if (verify) lines.push(`- worklog #${verify.entry} '확인': node scripts/worklog.mjs verified claude ${verify.entry} "<확인 방법과 결과 또는 미확인>"`);
+      if (nudge) lines.push({ entry: nudge.entry, kind: 'found' });
+      if (verify) lines.push({ entry: verify.entry, kind: 'verified' });
       withStateLock(input, () => {
         const { state: current, error } = readStateRaw(input);
         if (error) return;

@@ -29,8 +29,9 @@ const INJECT_LIMIT = 2200;
 export const SIGNAL = /(다시|또(?!는|한)|재발|도로|아직도|여전히|원래|예전|저번|지난번|되돌|롤백|번복|바꾸자|바꿔|취소하|안\s?하기로|하지\s?않기로|그만두|again|still|revert|undo|regress|roll\s?back|used to|previously)/i;
 
 // 사람이 친 입력이 아닌 것(알림·세션 간 메시지·컴팩션 이어 받기·슬래시 명령 감싸기·곁가지 메모)은 보지 않는다.
-// 다른 에이전트가 터미널로 넣은 글(머리말 "[Codex → Claude] …", "[A -> B]")도 사람 입력이 아니다(r1: Codex 검토 회차가 '다시'로 잡힘).
-const NOT_HUMAN = /^(<task-notification>|<cross-session-message|<system-reminder|<command-|<local-command|<bash-|\[Cross-session|This session is being continued|Stop hook feedback|Here is a note offered by a side agent|\[Artifact comment|\[Sent to Claude from|\[[^\]\n]{1,40}(?:→|->)[^\]\n]{1,40}\])/;
+// 다른 에이전트가 터미널로 넣은 글(머리말 "[Codex → Claude] …")도 사람 입력이 아니다(r1: Codex 검토 회차가 '다시'로 잡힘).
+// 양쪽이 알려진 에이전트 이름일 때만 — "[SQLite → PostgreSQL] …" 같은 사람의 제목은 그대로 본다.
+const NOT_HUMAN = /^(<task-notification>|<cross-session-message|<system-reminder|<command-|<local-command|<bash-|\[Cross-session|This session is being continued|Stop hook feedback|Here is a note offered by a side agent|\[Artifact comment|\[Sent to Claude from|\[\s*(?:claude|codex|gemini|hermes|cursor|opencode)\b[^\]\n]{0,30}(?:→|->)\s*(?:claude|codex|gemini|hermes|cursor|opencode)\b[^\]\n]{0,30}\])/i;
 
 export const SYSTEM = `You classify ONE message a user sent to a coding agent in a project with a long work history.
 Decide whether the message brings back something that was ALREADY handled or decided earlier in this project:

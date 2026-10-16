@@ -2687,6 +2687,57 @@ task('add', '언젠가 할 일', '--owner', 'ai', '--action', 'someday', '--urge
 const l1 = task('list').stdout, l2 = task('list', '--all').stdout;
 ok(!l1.includes('먼 예정 일') && l2.includes('먼 예정 일') && l2.includes('언젠가 할 일'), 'list --all이 앞날 Planning·Someday까지 보여 줌');
 
+// 8) Codex 1차 검토 결함 회귀(0.2.20)
+const guard = (mode, input) => spawnSync(process.execPath, ['scripts/git-guard.mjs', mode], { input: JSON.stringify(input), encoding: 'utf8' });
+const gturn = (prompt) => guard('turn-start', { session_id: 'gg', prompt });
+const gbash = (command) => guard('pre-tool', { session_id: 'gg', tool_name: 'Bash', tool_input: { command } }).stdout;
+const V = 'ORBIT_ALLOW_WORKLOG_ONLY_COMMIT';
+gturn('상태만 확인해');
+ok(gbash("printf '%s\\n' '<<EOF'\ngit push").includes('"deny"') && gbash('cat <<EOF\n$(git push)\nEOF').includes('"deny"') && gbash("bash <<'EOF'\ngit push\nEOF").includes('"deny"'), '따옴표 안 <<EOF·따옴표 없는 heredoc·bash에 넘기는 heredoc의 푸시는 막음');
+ok(gbash(`git -C /tmp/other-repo status && ${V}=1 git commit -m x`).includes('"deny"') && gbash(`printf '%s' 'git -C /tmp/o status'; ${V}=1 git commit -m x`).includes('"deny"') && gbash(`(cd /tmp/other && git status); ${V}=1 git commit -m x`).includes('"deny"'), '다른 저장소를 본 다른 명령은 이 저장소 커밋을 면제하지 않음');
+ok(gbash(`env -u X ${V}=1 git commit -m x`).includes('"deny"') && gbash(`env -i ${V}=1 git commit -m x`).includes('"deny"'), 'env 옵션 뒤의 허용 변수도 잡음');
+gturn('일지는 커밋하지 말고 코드만 커밋해');
+ok(gbash(`${V}=1 git commit -m x`).includes('"deny"'), '"일지는 커밋하지 말고"는 일지 커밋 허락이 아님');
+gturn('일지만이라도 커밋해');
+ok(gbash(`${V}=1 git commit -m x`) === '', '"일지만이라도 커밋해"는 허락');
+
+// ORBIT_HOOKS=off면 훅이 부르는 catchup·recent도 조용하고, 남의 밀린 표시를 지우지 않는다
+append('동료 결과', 'r');
+spawnSync(process.execPath, ['scripts/worklog.mjs', 'append', 'codex', 'CODEX_PENDING', 'r'], { encoding: 'utf8' });
+const pend = path.resolve(git(['rev-parse', '--git-path', 'orbit-state/worklog-pending/claude']).stdout.trim());
+const offc = spawnSync(process.execPath, ['scripts/worklog.mjs', 'catchup', 'claude'], { encoding: 'utf8', env: { ...process.env, ORBIT_HOOKS: 'off' } });
+const offr = spawnSync(process.execPath, ['scripts/worklog.mjs', 'recent', 'claude'], { encoding: 'utf8', env: { ...process.env, ORBIT_HOOKS: 'off' } });
+ok(offc.stdout === '' && offr.stdout === '' && fs.existsSync(pend), 'ORBIT_HOOKS=off → catchup·recent 조용, 밀린 표시 보존');
+
+// 작업 완료 알림은 사람 입력 경계가 아니다(도구 수가 0이 되지 않음)
+const T2 = path.join(ROOT, '..', 's74-t2.jsonl');
+const l2s = [{ type: 'user', promptId: 'Q', message: { role: 'user', content: '요청' } }];
+for (let i = 0; i < 12; i += 1) l2s.push({ type: 'user', promptId: 'Q', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `c${i}`, content: 'ok' }] } });
+l2s.push({ type: 'user', promptId: 'Q', message: { role: 'user', content: '<task-notification>\n<task-id>a</task-id>\n<status>completed</status>\n</task-notification>' } });
+fs.writeFileSync(T2, l2s.map((l) => JSON.stringify(l)).join('\n') + '\n');
+const qb = hook('begin', { session_id: 'q1', prompt: '요청', prompt_id: 'Q' });
+append('물음', '결과', '--session-id', 'q1', '--turn-token', tokenOf(qb));
+ok(/도구를 12번/.test(hook('stop', { session_id: 'q1', prompt_id: 'Q', transcript_path: T2 }).stdout), '작업 알림 뒤에도 그 턴 도구 12번을 셈');
+
+// 사람의 화살표 제목은 걸러지지 않는다
+fs.rmSync(mark, { force: true });
+again('[SQLite → PostgreSQL] 마이그레이션 다시 진행해');
+ok(fs.existsSync(mark), "'[SQLite → PostgreSQL]' 같은 사람 제목은 판단함");
+
+// 훅이 돌지 않은 커밋을 '통과'라고 하지 않는다
+fs.writeFileSync('tracked.js', 'c\n');
+git(['config', 'core.hooksPath', '.git/nonexistent-hooks']);
+const nh = spawnSync(process.execPath, ['scripts/worklog.mjs', 'append', 'claude', '물음', '결과', '--commit', '훅 없이'], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+ok(nh.status === 0 && nh.stdout.includes('돌지 않음') && !nh.stdout.includes('통과'), '커밋 훅이 없으면 검사가 돌지 않았다고 알림');
+git(['config', 'core.hooksPath', '.githooks']);
+
+// 미룬 알림은 그사이 채운 칸이면 다시 안내하지 않는다
+const hb = hook('begin', { session_id: 'h9', prompt: '요청', prompt_id: 'H9' }, { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' });
+const hn = (append('물음', '버그를 고쳤다', '--session-id', 'h9', '--turn-token', tokenOf(hb)).stdout.match(/기록됨 \[#(\d+)\]/) || [])[1];
+ok(hook('stop', { session_id: 'h9', prompt_id: 'H9' }, { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' }).stdout === '', '자동 실행 확인 알림은 미룸');
+spawnSync(process.execPath, ['scripts/worklog.mjs', 'verified', 'claude', hn, '테스트 통과'], { encoding: 'utf8' });
+ok(!/빠진 칸/.test(hook('begin', { session_id: 'h9', prompt: '다음', prompt_id: 'H10' }, { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' }).stdout), '그사이 채운 칸은 다시 안내하지 않음');
+
 // 7) '다시' 남용 알림(막지 않음)과 요약 범위 목록
 const ag1 = append('새 기능 시작', '결과', '--topic', '완전히 새 주제', '--again', '재요청');
 ok(ag1.status === 0 && ag1.stdout.includes("예전 기록이 없습니다"), "처음 쓰는 주제에 '다시' → 알림");
