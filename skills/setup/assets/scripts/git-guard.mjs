@@ -118,7 +118,8 @@ function outsideQuotes(line, index) {
 }
 
 // 파일에 글을 쓰는 heredoc 본문만 뺀다: 구분자를 따옴표로 감싸(<<'EOF') 본문이 펼쳐지지 않고, 그 줄의 명령이
-// cat·tee인 경우다. 따옴표 없는 구분자(본문의 $(…)가 실행됨)나 bash·sh 등에 넘기는 heredoc은 명령으로 본다.
+// cat·tee이며, 그 줄에 파이프·명령 치환이 없는 경우다(cat <<'EOF' | bash 는 본문이 실행된다).
+// 따옴표 없는 구분자(본문의 $(…)가 실행됨)나 bash·sh 등에 넘기는 heredoc은 명령으로 본다.
 export function stripHeredocs(command) {
   const lines = String(command || '').split('\n');
   const out = [];
@@ -128,8 +129,9 @@ export function stripHeredocs(command) {
     out.push(line);
     const match = /<<-?\s*(['"])([A-Za-z_][\w-]*)\1/.exec(line);
     if (!match || !outsideQuotes(line, match.index)) continue;
+    const bare = stripQuoted(line);
     const head = stripQuoted(line.slice(0, match.index)).split(/[;&|(]/).at(-1).trim();
-    if (/^(?:cat|tee)\b/.test(head)) end = match[2];
+    if (/^(?:cat|tee)\b/.test(head) && !/\||\$\(|`/.test(bare)) end = match[2];
   }
   return out.join('\n');
 }
@@ -149,16 +151,13 @@ function segments(command) {
   return parts.filter((p) => p.text.trim());
 }
 
-// 환경 대입이 그 명령에 실제로 붙는지: VAR=1 cmd, env [옵션] VAR=1 cmd, sudo/command/exec 앞붙이 포함.
-const PREFIX = String.raw`(?:(?:env|sudo|command|exec|nice|nohup|time)(?:\s+(?:-u\s+\S+|-\S+))*\s+)*(?:[A-Za-z_]\w*=\S*\s+)*`;
-const assignHere = () => new RegExp(String.raw`^\s*${PREFIX}${ALLOW_ENV}=`);
+// 허용 변수 대입이 있는지: 따옴표 밖(파일로 쓰는 heredoc 본문 제외)에서 낱말 첫머리의 VAR= 를 모두 센다.
+// 앞붙이(env·sudo·다른 대입)의 순서를 해석하지 않는다 — 해석하다 놓치면 우회가 된다(echo VAR=1 같은 것도 막는 쪽).
+const assignAny = () => new RegExp(String.raw`(?:^|[\s;&|(\x60])${ALLOW_ENV}=`, 'm');
 const exported = () => new RegExp(String.raw`(?:^|[;&|\n])\s*export\s+(?:\S+\s+)*${ALLOW_ENV}=`, 'm');
 
-// 허용 변수를 실제로 붙여 실행하는지(따옴표 안·파일로 쓰는 heredoc 본문의 글은 세지 않는다).
 export function usesAllowEnv(command) {
-  const text = stripQuoted(stripHeredocs(command));
-  if (exported().test(text)) return true;
-  return text.split(/&&|\|\||;|\||\n|[()`]|\$\(/).some((part) => assignHere().test(part));
+  return assignAny().test(stripQuoted(stripHeredocs(command)));
 }
 
 function inside(root, target) {
@@ -166,21 +165,23 @@ function inside(root, target) {
   return target === base || target.startsWith(`${base}${path.sep}`);
 }
 
-// 허용 변수가 이 저장소의 명령에 붙었는지. 다른 저장소를 가리키는 명령(그 조각의 git -C <경로>, 또는 &&로 바로 이어진
-// cd <경로>)에만 붙었으면 이 저장소의 허락과 상관없다. 경로를 확실히 모르면(따옴표 경로·하위 셸·export) 이 저장소로 본다.
-export function allowEnvForThisRepo(command, root = ROOT) {
+// 허용 변수가 이 저장소의 명령에 붙었는지. 다른 저장소를 가리키는 명령(그 조각의 git -C <경로>, 또는 &&로 끊김 없이
+// 이어진 cd들로 정해진 작업 폴더)에만 붙었으면 이 저장소의 허락과 상관없다. 상대 경로는 그때까지 확정한 작업 폴더에서
+// 계산한다. 작업 폴더를 확실히 모르면(따옴표 경로·하위 셸·export·&& 아닌 이음 뒤의 cd) 이 저장소로 본다.
+export function allowEnvForThisRepo(command, root = ROOT, start = root) {
   if (!usesAllowEnv(command)) return false;
   const parts = segments(command);
   if (!parts || exported().test(stripQuoted(stripHeredocs(command)))) return true;
-  const resolve = (p) => (p && !/^(''|"")$/.test(p) ? path.resolve(root, p.replace(/^~(?=\/|$)/, process.env.HOME || '~')) : null);
-  let cwd = null; // 확실히 아는 작업 폴더(&&로 이어진 동안만)
+  const resolve = (p, from) => (from && p && !/^(''|"")$/.test(p) ? path.resolve(from, p.replace(/^~(?=\/|$)/, process.env.HOME || '~')) : null);
+  let cwd = path.resolve(start);
+  let moved = false; // 이 줄기에서 cd로 작업 폴더를 바꿨는지
   for (const part of parts) {
-    if (part.sep !== '&&') cwd = null;
+    if (moved && part.sep !== '&&') { cwd = null; moved = false; }
     const cd = /^\s*cd\s+(\S+)\s*$/.exec(part.text);
-    if (cd) { cwd = resolve(cd[1]) ?? null; continue; }
-    if (!assignHere().test(part.text)) continue;
+    if (cd) { cwd = resolve(cd[1], cwd); moved = true; continue; }
+    if (!assignAny().test(part.text)) continue;
     const dashC = /\bgit\s+(?:-c\s+\S+\s+)*-C\s+(\S+)/.exec(part.text);
-    const target = dashC ? resolve(dashC[1]) : cwd;
+    const target = dashC ? resolve(dashC[1], cwd) : cwd;
     if (!target || inside(root, target)) return true;
   }
   return false;
@@ -218,7 +219,7 @@ function handlePreTool(input) {
   const command = String(input.tool_input?.command || '');
   const push = isPush(command);
   // 변수를 실제로 값과 함께 넘길 때만 본다. 따옴표 안의 글(일지·커밋 메시지)에 이름이 나오는 것은 세지 않는다.
-  const override = allowEnvForThisRepo(command);
+  const override = allowEnvForThisRepo(command, ROOT, input.cwd ? String(input.cwd) : ROOT); // 도구가 도는 폴더(훅 입력 cwd)에서 시작
   if (!push && !override) return;
   const state = readState(input);
   if (push && !state.push) {

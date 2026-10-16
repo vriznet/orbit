@@ -2700,6 +2700,13 @@ gturn('일지는 커밋하지 말고 코드만 커밋해');
 ok(gbash(`${V}=1 git commit -m x`).includes('"deny"'), '"일지는 커밋하지 말고"는 일지 커밋 허락이 아님');
 gturn('일지만이라도 커밋해');
 ok(gbash(`${V}=1 git commit -m x`) === '', '"일지만이라도 커밋해"는 허락');
+// Codex 2차: cat·tee 출력이 셸로 가는 heredoc, cd 뒤 상대 경로, 대입·env 섞인 앞붙이
+gturn('상태만 확인해');
+ok(gbash("cat <<'EOF' | bash\ngit push\nEOF").includes('"deny"') && gbash(`tee /dev/null <<'EOF' | sh\n${V}=1 git commit -m x\nEOF`).includes('"deny"'), '셸로 넘어가는 cat·tee heredoc 본문은 명령으로 봄');
+fs.mkdirSync('child', { recursive: true });
+ok(gbash(`cd child && ${V}=1 git -C .. commit -m x`).includes('"deny"') && gbash(`cd child && cd .. && ${V}=1 git commit -m x`).includes('"deny"'), 'cd 뒤 상대 경로는 바뀐 작업 폴더에서 계산(이 저장소로 돌아옴)');
+ok(gbash(`NODE_ENV=test env ${V}=1 git commit -m x`).includes('"deny"') && gbash(`env NODE_ENV=test env ${V}=1 git commit -m x`).includes('"deny"'), '대입·env가 섞인 앞붙이 뒤의 허용 변수도 잡음');
+ok(guard('pre-tool', { session_id: 'gg', tool_name: 'Bash', cwd: '/tmp', tool_input: { command: `${V}=1 git commit -m x` } }).stdout === '', '도구가 다른 폴더에서 돌면 그 커밋은 이 저장소 허락과 상관없음');
 
 // ORBIT_HOOKS=off면 훅이 부르는 catchup·recent도 조용하고, 남의 밀린 표시를 지우지 않는다
 append('동료 결과', 'r');
