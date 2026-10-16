@@ -138,7 +138,7 @@ function segments(command) {
   const text = stripQuoted(stripHeredocs(command));
   if (/[()`]/.test(text)) return null;
   const parts = [];
-  const re = /(&&|\|\||;|\||\n)/g;
+  const re = /(&&|\|\||;|\||&|\n)/g; // 단독 &(백그라운드)도 명령을 나눈다(Codex 6차 17번)
   let last = 0, sep = null, m;
   while ((m = re.exec(text)) !== null) {
     parts.push({ text: text.slice(last, m.index), sep });

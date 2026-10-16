@@ -2730,6 +2730,8 @@ ok(pre(ROOT, `${V}=1 git -C ${other4} -C ${ROOT} commit -m x`).includes('"deny"'
 fs.mkdirSync(path.join(other4, 'kid'), { recursive: true }); fs.symlinkSync(path.join(other4, 'kid'), path.join(ROOT, 'out-link'));
 ok(pre(ROOT, `cd out-link/.. && ${V}=1 git commit -m x`).includes('"deny"'), '셸 cd는 논리 경로(링크/.. → 원래 폴더)로 계산');
 fs.unlinkSync(path.join(ROOT, 'out-link'));
+// Codex 6차: 단독 & 뒤의 이 저장소 커밋
+ok(pre(ROOT, `${V}=1 git -C ${other4} commit -m o & ${V}=1 git commit -m local`).includes('"deny"'), '단독 & 로 이은 이 저장소 커밋은 면제하지 않음');
 
 // ORBIT_HOOKS=off면 훅이 부르는 catchup·recent도 조용하고, 남의 밀린 표시를 지우지 않는다
 append('동료 결과', 'r');
