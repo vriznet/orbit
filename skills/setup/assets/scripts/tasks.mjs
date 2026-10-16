@@ -14,6 +14,7 @@
 //   node scripts/tasks.mjs edit <id> --key value ...   (같은 플래그로 수정)
 //   node scripts/tasks.mjs list
 //   node scripts/tasks.mjs review            (열린 Next Action + 기한 지난 Planning + Waiting 출력 + 미러 갱신)
+//   node scripts/tasks.mjs list [--all]      (review와 같은 목록, 원장은 안 바꿈. --all이면 앞날 Planning·Someday까지)
 //   node scripts/tasks.mjs check             (원장 규칙 검사 — 위반이 있으면 목록과 함께 종료 코드 1)
 //
 // 원장 규칙(불변식)은 이 스크립트가 지킨다. AI가 규칙을 기억하느냐에 기대지 않는다.
@@ -330,7 +331,7 @@ function render(db) {
   fs.writeFileSync(DONE_MD, D.join('\n') + '\n');
 }
 
-function reviewText(db) {
+function reviewText(db, all = false) {
   const t = today();
   const nexts = db.open.filter((x) => x.action === 'next');
   const overdue = db.open.filter((x) => x.action === 'planning' && x.due && x.due < t);
@@ -350,6 +351,11 @@ function reviewText(db) {
   dump('오늘 예정', dueToday);
   dump('Next Action', nexts);
   dump('Waiting', waiting);
+  // list --all: 앞날 예정(Planning)과 언젠가(Someday)까지 — 기본 list에는 안 나와 원장 파일을 직접 봐야 했다(r1 세션 #567).
+  if (all) {
+    dump('Planning(앞으로)', db.open.filter((x) => x.action === 'planning' && !(x.due && x.due <= t)));
+    dump('Someday', db.open.filter((x) => x.action === 'someday'));
+  }
   if (!overdue.length && !dueToday.length && !nexts.length && !waiting.length && !violations.length) L.push('열린 급한 할일 없음.');
   return L.join('\n');
 }
@@ -511,7 +517,7 @@ function main() {
     });
     console.log('원장 초기화 — {{DOCS_DIR}}/tasks.json·tasks.md 생성(할일 없으면 빈 원장).');
   } else if (cmd === 'list') {
-    console.log(reviewText(load()));
+    console.log(reviewText(load(), rest.includes('--all')));
   } else if (cmd === 'review') {
     withLock(DATA, () => {
       const db = load();
@@ -530,7 +536,7 @@ function main() {
     console.log(`  고치는 법: ${PLANNING_FIX}\n           ${WAITING_FIX}`);
     return 1;
   } else {
-    console.log('명령: init | add | done <id> --evidence | drop <id> --reason | reopen <id> --reason | edit <id> | list | review | check');
+    console.log('명령: init | add | done <id> --evidence | drop <id> --reason | reopen <id> --reason | edit <id> | list [--all] | review | check');
   }
   return 0;
 }

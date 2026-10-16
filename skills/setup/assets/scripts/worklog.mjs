@@ -10,7 +10,7 @@
 //   append <작성자> "<물음>" "<결과>"   이번 턴을 기록하고, 그 작성자의 책갈피를 최신으로 옮긴다
 //   append ... --session-id <ID> --turn-token <TOKEN>  Claude 훅의 이번 턴 미기록 상태를 완료한다
 //   append ... --session-id <ID> --turn-id <N>          위와 동일하되 구버전 훅과의 호환용(토큰 없을 때)
-//   append ... --commit "<커밋메시지>"  기록 직후 git add -A + 커밋까지 한 번에 (순서 실수 방지)
+//   append ... --commit "<커밋메시지>"  기록 직후 추적 중인 변경(git add -u)+일지를 커밋까지 한 번에 (순서 실수 방지, 새 파일은 먼저 git add)
 //   append ... --decision "<결정 근거>" --found "<발견>"  선택 칸. 결론형으로: 고른 것 / 버린 대안 / 근거 수치,
 //                                         이번 턴에 알아낸 사실. (--why는 같은 칸의 옛 이름으로 계속 받는다)
 //   summary <작성자> "<요약>"           최근 턴들을 하나로 묶어 요약한다 (3턴마다)
@@ -33,7 +33,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import {
-  AGAIN_KINDS, buildTopics, findTopic, normalizeTopic, parseEntries, readTasks, recentTopics, similarTopics, splitTopics,
+  AGAIN_KINDS, buildTopics, clip, findTopic, normalizeTopic, parseEntries, readTasks, recentTopics, similarTopics, splitTopics,
   threadLines, topicStatus,
 } from './topic-lib.mjs';
 
@@ -261,9 +261,17 @@ function append(agent, ask, result, extra = {}) {
       if (other !== agent) markPending(other);
     }
     const since = n - s.lastSummarized; // 마지막 요약 이후 쌓인 턴 수
-    process.stdout.write(
-      since >= 3 ? `기록됨 [#${n}]. 이제 최근 ${since}턴을 요약할 때입니다.\n` : `기록됨 [#${n}].\n`
-    );
+    if (since < 3) {
+      process.stdout.write(`기록됨 [#${n}].\n`);
+      return n;
+    }
+    // 요약 범위는 일지 전체에 하나다(따라잡기가 쓴다). 그 범위에는 다른 세션·작성자의 항목도 들어 있으므로, 무엇을
+    // 요약해야 하는지 목록으로 보여 준다 — 자기 턴만 요약해 남의 항목이 빠진 일이 있었다(r1 세션 #543~546).
+    const listed = parseEntries(fs.readFileSync(LOG, 'utf8'))
+      .filter((entry) => entry.n > s.lastSummarized && entry.n <= n)
+      .slice(-8)
+      .map((entry) => `  #${entry.n} ${entry.agent}: ${clip(entry.ask || '', 50)}`);
+    process.stdout.write(`기록됨 [#${n}]. 이제 최근 ${since}턴을 요약할 때입니다. 요약 범위 #${s.lastSummarized + 1}~#${n}(다른 세션·작성자 항목도 빼지 말고 함께 요약):\n${listed.join('\n')}\n`);
     return n;
   });
 }
@@ -419,6 +427,16 @@ function topicHints(names, n, again) {
     }
   }
   if (!again) return;
+  // '다시' 남용 알림(막지 않음) — r1에서 orbit 일지 354개 중 101개에 '다시'가 붙었다(대본의 '다시'는 7개).
+  // 처음 쓰는 주제이거나, 바로 앞 항목도 같은 주제(이어서 하는 일)면 '다시'가 아닐 가능성이 크다.
+  const previous = entries.filter((entry) => entry.n < Number(n) && entry.agent === entries.find((e) => e.n === Number(n))?.agent).at(-1);
+  for (const name of names) {
+    if (!findTopic(before, name)) {
+      process.stdout.write(`'다시(${again})'인데 주제 '${name}'의 예전 기록이 없습니다. 처음 다루는 일이면 '다시'가 아닙니다 — 끝냈거나 정한 것이 다시 움직일 때만 붙입니다.\n`);
+    } else if (previous && (previous.topics || []).some((topic) => normalizeTopic(topic) === normalizeTopic(name)) && !previous.again) {
+      process.stdout.write(`'다시(${again})' — 바로 앞 항목 #${previous.n}도 주제 '${name}'입니다. 이어서 하는 일이면 '다시'가 아닙니다(끝냈거나 정한 것이 다시 움직일 때만).\n`);
+    }
+  }
   const all = buildTopics(entries, tasks);
   for (const name of names) {
     const current = findTopic(all, name);
@@ -692,14 +710,33 @@ if (againKind !== null && !AGAIN_KINDS.includes(againKind)) {
 }
 
 // 기록을 커밋에 포함 → 순서 실수(커밋 먼저, 기록 나중)를 원천 차단
+// 싣는 것: 이미 스테이징한 것 + 추적 중인 파일의 변경(git add -u) + 일지 두 파일. 추적하지 않는 새 파일은 싣지 않고
+// 목록만 알린다 — 예전의 git add -A는 사용자 폴더·설정 파일까지 커밋에 섞었다(필요한 새 파일은 먼저 git add).
+// 마지막 줄에 커밋 결과를 고정 형식으로 남긴다 — 출력을 tail로 잘라도 훅(테스트) 통과 여부가 보이게.
 function gitCommitAll(msg) {
+  const git = (args, opts = {}) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', ...opts });
   try {
-    execFileSync('git', ['add', '-A'], { cwd: ROOT, stdio: 'inherit' });
-    execFileSync('git', ['commit', '-m', msg], { cwd: ROOT, stdio: 'inherit' });
+    git(['add', '-u'], { stdio: 'inherit' });
+    const logs = [LOG, STATE].filter((file) => fs.existsSync(file)).map((file) => path.relative(ROOT, file));
+    if (logs.length) git(['add', '--', ...logs], { stdio: 'inherit' });
   } catch {
-    process.stderr.write('커밋 실패(또는 커밋할 변경 없음). 수동 확인 필요.\n');
+    process.stderr.write('스테이징 실패. 수동 확인 필요.\n');
     process.exit(1);
   }
+  let untracked = [];
+  try { untracked = git(['-c', 'core.quotePath=false', 'ls-files', '--others', '--exclude-standard']).split('\n').filter(Boolean); } catch {}
+  if (untracked.length) {
+    process.stderr.write(`추적하지 않는 새 파일 ${untracked.length}개는 싣지 않았습니다(필요하면 git add <경로> 뒤 커밋): ${untracked.slice(0, 10).join(', ')}${untracked.length > 10 ? ' …' : ''}\n`);
+  }
+  try {
+    git(['commit', '-m', msg], { stdio: 'inherit' });
+  } catch {
+    process.stderr.write('커밋 결과: 실패 — 커밋 훅(테스트 등)이 막았거나 커밋할 변경이 없습니다. 위 출력을 확인하세요.\n');
+    process.exit(1);
+  }
+  let head = '';
+  try { head = git(['rev-parse', '--short', 'HEAD']).trim(); } catch {}
+  process.stdout.write(`커밋 결과: ${head} 만듦 — 커밋 훅(.githooks/pre-commit)을 통과함\n`);
 }
 
 const [cmd, agent, a, b] = argv;

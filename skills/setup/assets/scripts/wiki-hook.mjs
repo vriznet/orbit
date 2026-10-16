@@ -165,6 +165,7 @@ function handleStop(input) {
 }
 
 const mode = process.argv[2];
+if (String(process.env.ORBIT_HOOKS || '').toLowerCase() === 'off') process.exit(0); // 보조용 claude -p 등에서 기록·기억 훅을 끈다(푸시 지킴이는 그대로)
 const input = readHookInput();
 
 if (mode === 'post') {

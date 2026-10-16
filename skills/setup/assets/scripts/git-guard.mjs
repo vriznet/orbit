@@ -90,11 +90,17 @@ function asked(text, words) {
   return false;
 }
 
+// 일지만 담은 커밋 허용 변수는 사용자가 '일지(기록)'를 커밋하라고 한 턴에만 쓴다. 그냥 "커밋해"는 아니다 —
+// r1에서 에이전트가 "테스트 돌리고 커밋"마다 일지만 담은 커밋을 만들며 이 변수를 60번 붙였다.
+const WORKLOG_WORDS = /(?:일지|작업\s*기록|worklog)/i;
+
 export function judgePrompt(prompt) {
   const text = ownWords(prompt);
+  const commit = asked(text, '커밋|\\bcommit');
   return {
     push: asked(text, '푸시|푸쉬|\\bpush') || UPLOAD.test(text),
-    commit: asked(text, '커밋|\\bcommit'),
+    commit,
+    worklogCommit: commit && WORKLOG_WORDS.test(text),
   };
 }
 
@@ -105,9 +111,42 @@ function stripQuoted(command) {
     .replace(/"(?:\\.|[^"\\])*"/g, '""');
 }
 
+// heredoc 본문(<<'EOF' … EOF)은 명령이 아니라 파일에 쓰는 글이다 — 그 안의 변수 이름은 세지 않는다.
+export function stripHeredocs(command) {
+  const lines = String(command || '').split('\n');
+  const out = [];
+  let end = null;
+  for (const line of lines) {
+    if (end !== null) { if (line.replace(/^\t+/, '') === end) end = null; continue; }
+    out.push(line);
+    const match = /<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(line);
+    if (match) end = match[2];
+  }
+  return out.join('\n');
+}
+
+// 허용 변수를 실제로 붙여 실행하는지: 명령 첫머리의 환경 대입(VAR=1 cmd, env VAR=1 cmd, export VAR=1)일 때만 센다.
+export function usesAllowEnv(command) {
+  const text = stripQuoted(stripHeredocs(command));
+  return new RegExp(`(?:^|[;&|(\\n\`]|\\benv|\\bexport)\\s*(?:[A-Za-z_]\\w*=\\S*\\s+)*${ALLOW_ENV}=`, 'm').test(text);
+}
+
+// 다른 저장소를 가리키는 명령(git -C <경로>, cd <경로> 뒤의 git)은 이 저장소의 허락과 상관없다.
+export function targetsOtherRepo(command, root = ROOT) {
+  const text = stripHeredocs(command);
+  const paths = [];
+  for (const match of text.matchAll(/(?:\bgit\s+(?:-c\s+\S+\s+)*-C\s+|(?:^|[;&|(]\s*)cd\s+)(['"]?)([^'"\s;&|)]+)\1/gm)) paths.push(match[2]);
+  if (!paths.length) return false;
+  const base = path.resolve(root);
+  return paths.every((p) => {
+    const resolved = path.resolve(base, p.replace(/^~(?=\/|$)/, process.env.HOME || '~'));
+    return resolved !== base && !resolved.startsWith(`${base}${path.sep}`);
+  });
+}
+
 export function isPush(command) {
   // git 바로 뒤의 옵션(-c 값, -C 경로, --옵션)만 건너뛰고 하위 명령이 push인지 본다(git stash push는 아니다).
-  return /(?:^|[\s;&|(`])git(?:\s+(?:-[cC]\s+\S+|--?[\w-]+(?:=\S*)?))*\s+push(?:\s|$|[;&|)`])/m.test(stripQuoted(command));
+  return /(?:^|[\s;&|(`])git(?:\s+(?:-[cC]\s+\S+|--?[\w-]+(?:=\S*)?))*\s+push(?:\s|$|[;&|)`])/m.test(stripQuoted(stripHeredocs(command)));
 }
 
 function deny(reason) {
@@ -137,15 +176,15 @@ function handlePreTool(input) {
   const command = String(input.tool_input?.command || '');
   const push = isPush(command);
   // 변수를 실제로 값과 함께 넘길 때만 본다. 따옴표 안의 글(일지·커밋 메시지)에 이름이 나오는 것은 세지 않는다.
-  const override = new RegExp(`\\b${ALLOW_ENV}=`).test(stripQuoted(command));
+  const override = usesAllowEnv(command) && !targetsOtherRepo(command);
   if (!push && !override) return;
   const state = readState(input);
   if (push && !state.push) {
     deny('사용자가 이번 요청에서 푸시를 시키지 않았습니다. 푸시하지 않습니다. 푸시가 필요하면 답변에서 그 까닭을 알리고, 사용자가 "푸시해"라고 말한 턴에 실행하세요. 이 거절을 돌아가는 다른 방법(스크립트, 다른 도구)을 쓰지 않습니다.');
     return;
   }
-  if (override && !state.commit) {
-    deny(`사용자가 이번 요청에서 커밋을 시키지 않았습니다. ${ALLOW_ENV}는 사용자가 일지만이라도 커밋하라고 말한 턴에만 씁니다. 일지는 커밋하지 않은 채로 두고, 다음 작업 커밋에 함께 싣습니다.`);
+  if (override && !state.worklogCommit) {
+    deny(`사용자가 이번 요청에서 일지(기록)를 커밋하라고 하지 않았습니다. ${ALLOW_ENV}는 그렇게 말한 턴에만 씁니다. 커밋하라고 했는데 바뀐 것이 일지뿐이면 커밋하지 말고 "바꾼 코드가 없어 커밋할 것이 없다(일지는 다음 작업 커밋에 함께 싣는다)"고 답하세요.`);
   }
 }
 

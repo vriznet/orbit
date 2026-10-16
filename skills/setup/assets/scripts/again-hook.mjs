@@ -29,7 +29,8 @@ const INJECT_LIMIT = 2200;
 export const SIGNAL = /(다시|또(?!는|한)|재발|도로|아직도|여전히|원래|예전|저번|지난번|되돌|롤백|번복|바꾸자|바꿔|취소하|안\s?하기로|하지\s?않기로|그만두|again|still|revert|undo|regress|roll\s?back|used to|previously)/i;
 
 // 사람이 친 입력이 아닌 것(알림·세션 간 메시지·컴팩션 이어 받기·슬래시 명령 감싸기·곁가지 메모)은 보지 않는다.
-const NOT_HUMAN = /^(<task-notification>|<cross-session-message|<system-reminder|<command-|<local-command|<bash-|\[Cross-session|This session is being continued|Stop hook feedback|Here is a note offered by a side agent|\[Artifact comment)/;
+// 다른 에이전트가 터미널로 넣은 글(머리말 "[Codex → Claude] …", "[A -> B]")도 사람 입력이 아니다(r1: Codex 검토 회차가 '다시'로 잡힘).
+const NOT_HUMAN = /^(<task-notification>|<cross-session-message|<system-reminder|<command-|<local-command|<bash-|\[Cross-session|This session is being continued|Stop hook feedback|Here is a note offered by a side agent|\[Artifact comment|\[Sent to Claude from|\[[^\]\n]{1,40}(?:→|->)[^\]\n]{1,40}\])/;
 
 export const SYSTEM = `You classify ONE message a user sent to a coding agent in a project with a long work history.
 Decide whether the message brings back something that was ALREADY handled or decided earlier in this project:
@@ -129,15 +130,17 @@ function searchHistory(query) {
   }
 }
 
-export function injection(decision, topics) {
+// 이어 갈 알려진 주제도, 검색되는 예전 기록도 없으면 넣지 않는다 — 돌아올 '예전 일'이 없는데 '다시'라고 알리면
+// 헛신호다(r1: Haiku가 "알려진 주제와 맞지 않음"이라고 하고도 주입한 일). 검색은 그대로 쓰도록 search를 받는다.
+export function injection(decision, topics, search = searchHistory) {
   const lines = [`[orbit 다시] 예전에 다룬 일이 다시 움직이는 입력으로 보입니다 — 갈래: ${decision.kind}${decision.why ? ` (Haiku 판단: ${decision.why})` : ''}`];
   const topic = decision.topic ? findTopic(topics, decision.topic) : null;
   if (topic) {
     lines.push(`주제 '${topic.name}' 흐름 — ${topicStatus(topic)}`, ...threadLines(topic, { limit: 8, width: 70 }));
   } else {
-    const found = searchHistory(decision.query);
-    if (found.length) lines.push(`관련 기록(검색: ${decision.query}):`, ...found);
-    else lines.push(`관련 기록을 찾지 못했습니다(검색: ${decision.query || '없음'}). 필요하면 /orbit:recall로 찾으세요.`);
+    const found = search(decision.query);
+    if (!found.length) return '';
+    lines.push(`관련 기록(검색: ${decision.query}):`, ...found);
   }
   const name = topic ? topic.name : '<주제>';
   lines.push(`지난 '완료'·'결정' 기록만 믿지 말고 지금 상태를 직접 확인(재현·테스트·코드)한 뒤 진행하세요. 이번 턴 기록에는 \`--topic "${name}" --again ${decision.kind}\`를 붙입니다. 닫힌 할일이 다시 필요하면 \`node scripts/tasks.mjs reopen <id> --reason "<까닭>"\`.`);
@@ -159,6 +162,7 @@ async function report(record) {
 
 async function main() {
   if (process.env.ORBIT_AGAIN_CHILD) return; // Haiku 판단용으로 띄운 claude 안에서는 아무것도 하지 않는다
+  if (String(process.env.ORBIT_HOOKS || '').toLowerCase() === 'off') return; // 보조용 claude -p 등에서 끈다
   const input = readInput();
   const prompt = String(input.prompt ?? '').trim();
   if (!enabled() || prompt.length < 4 || NOT_HUMAN.test(prompt)) return;

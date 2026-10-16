@@ -1606,7 +1606,7 @@ S58_OUT="$(cd "$R58" && node - <<'NODE'
 const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
 const ROOT = process.cwd(); const LOG = path.join(ROOT, 'scenario58-docs', 'worklog.md');
 let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
-const hook = (mode, input, env = {}) => spawnSync(process.execPath, ['scripts/worklog-hook.mjs', mode], { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, ...env } });
+const hook = (mode, input, env = {}) => spawnSync(process.execPath, ['scripts/worklog-hook.mjs', mode], { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'cli', ORBIT_HEADLESS: '', ...env } });
 const tokenOf = (r) => (r.stdout.match(/--turn-token \\?"([0-9a-f]+)\\?"/) || [])[1];
 const append = (...args) => spawnSync(process.execPath, ['scripts/worklog.mjs', 'append', 'claude', ...args], { encoding: 'utf8' });
 const transcript = (name, promptId, tools) => {
@@ -1647,6 +1647,17 @@ ok(turn('s58f', 'pF', 15, [], { ORBIT_FOUND_MIN_TOOLS: '0' }).stop().stdout === 
 const b = hook('begin', { session_id: 's58g', prompt: '요청', prompt_id: 'pG' });
 const g = hook('stop', { session_id: 's58g', prompt_id: 'pG', transcript_path: transcript('g', 'pG', 20) });
 ok(g.stdout.includes('기록되지 않았습니다') && !g.stdout.includes('발견'), '미기록이면 기존 기록 강제만');
+// 자동 실행(claude -p): 발견 알림으로 막지 않고 다음 사용자 턴 안내로 미룬다 — 막으면 기록 글이 답을 가린다
+const h = turn('s58h', 'pH', 12, [], { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' });
+ok(h.stop().stdout === '', '자동 실행(sdk-cli) → 발견 알림으로 막지 않음');
+const nb = hook('begin', { session_id: 's58h', prompt: '다음', prompt_id: 'pH2' });
+ok(/지난 턴 기록에서 빠진 칸/.test(nb.stdout) && /found claude \d+/.test(nb.stdout), '다음 사용자 턴 안내로 미룸');
+ok(!/빠진 칸/.test(hook('begin', { session_id: 's58h', prompt: '또', prompt_id: 'pH3' }).stdout), '미룬 알림은 한 번만');
+ok(turn('s58j', 'pJ', 12, [], { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli', ORBIT_HEADLESS: 'off' }).stop().stdout !== '', 'ORBIT_HEADLESS=off → 자동 실행이어도 막음');
+hook('begin', { session_id: 's58i', prompt: '요청', prompt_id: 'pI' });
+const gi = hook('stop', { session_id: 's58i', prompt_id: 'pI' }, { ORBIT_HEADLESS: 'on' });
+ok(gi.stdout.includes('기록되지 않았습니다') && gi.stdout.includes('그대로 다시 쓰고'), '자동 실행 미기록 차단은 기록 뒤 답을 다시 쓰라고 안내');
+ok(!g.stdout.includes('그대로 다시 쓰고'), '대화형 미기록 차단에는 그 안내 없음');
 process.exit(failed ? 1 : 0);
 NODE
 )"; S58_RC=$?
@@ -2366,6 +2377,14 @@ ok(git(['commit', '-q', '-m', '작업과 일지']).status === 0, '다른 파일�
 fs.writeFileSync('code.js', 'y\n'); git(['add', '-A']);
 ok(git(['commit', '-q', '-m', '작업만']).status === 0, '일지가 없는 커밋도 통과');
 ok(git(['commit', '-q', '--allow-empty', '-m', '빈 커밋']).status === 0, '스테이징이 비어 있으면 막지 않음');
+// 프로젝트 검사(.githooks/pre-commit.local)는 허용 변수를 붙여도 돈다 — 예전에는 변수가 훅 전체를 건너뛰어 npm test가 빠졌다
+fs.writeFileSync('.githooks/pre-commit.local', '#!/usr/bin/env bash\necho "local 검사 실패" >&2\nexit 1\n', { mode: 0o755 });
+fs.appendFileSync(log, '\n셋째 줄\n'); git(['add', log]);
+const localFail = git(['commit', '-m', '일지만(허용, 검사 실패)'], { ORBIT_ALLOW_WORKLOG_ONLY_COMMIT: '1' });
+ok(localFail.status !== 0 && localFail.stderr.includes('local 검사 실패'), '허용 변수를 붙여도 프로젝트 검사가 돌고 실패하면 막음');
+fs.writeFileSync('.githooks/pre-commit.local', '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
+ok(git(['commit', '-q', '-m', '일지만(허용, 검사 통과)'], { ORBIT_ALLOW_WORKLOG_ONLY_COMMIT: '1' }).status === 0, '프로젝트 검사가 통과하면 허용 변수대로 통과');
+fs.unlinkSync('.githooks/pre-commit.local');
 
 const guard = (mode, input) => spawnSync(process.execPath, ['scripts/git-guard.mjs', mode], { input: JSON.stringify(input), encoding: 'utf8' });
 const turn = (session, prompt) => guard('turn-start', { session_id: session, prompt });
@@ -2381,7 +2400,9 @@ turn('a', '<task-notification>끝</task-notification>');
 ok(bash('a', 'git push') === '', '작업 알림은 허락을 거두지 않음');
 turn('a', '푸시하지 말고 커밋만 해');
 ok(bash('a', 'git push').includes('"deny"'), '"푸시하지 말고"는 시킨 것이 아님');
-ok(bash('a', 'ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x') === '', '커밋을 시킨 턴에는 허용 변수를 쓸 수 있음');
+ok(bash('a', 'ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x').includes('"deny"'), '그냥 커밋을 시킨 턴에는 허용 변수 거절(일지 커밋을 시킨 것이 아님)');
+turn('a', '일지만이라도 커밋해');
+ok(bash('a', 'ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x') === '', '일지를 커밋하라고 한 턴에는 허용 변수를 쓸 수 있음');
 turn('a', '푸시도 마찬가지야. 푸시해라고 하기 전에는 푸시하지 않게 만들어');
 ok(bash('a', 'git push').includes('"deny"'), '푸시를 이야기만 한 턴은 거절');
 ok(bash('a', 'ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x').includes('"deny"'), '커밋을 시키지 않은 턴에는 허용 변수도 거절');
@@ -2390,6 +2411,10 @@ ok(bash('a', 'git push').includes('"deny"'), '붙여 넣은 글 속의 "푸시�
 ok(bash('b', 'git push').includes('"deny"'), '다른 세션의 허락은 넘어오지 않음');
 ok(bash('a', 'node scripts/worklog.mjs append claude "물음" "ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 을 설명"') === '' && bash('a', 'echo ORBIT_ALLOW_WORKLOG_ONLY_COMMIT') === '', '따옴표 안이나 값 없는 변수 이름은 세지 않음');
 ok(guard('pre-tool', { session_id: 'a', tool_name: 'Read', tool_input: {} }).stdout === '', 'Bash가 아니면 조용');
+// 허용 변수는 실제로 붙여 실행할 때만, 이 저장소를 커밋할 때만 본다(heredoc 본문·다른 저장소 커밋은 상관없음)
+ok(bash('a', "cat > note.md <<'EOF'\nORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x\ngit push\nEOF\ngit status") === '', 'heredoc 본문의 변수·푸시 글은 세지 않음');
+ok(bash('a', 'cd /tmp/other-repo && ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x') === '' && bash('a', 'ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git -C /tmp/other-repo commit -m x') === '', '다른 저장소 커밋의 허용 변수는 이 저장소 허락과 상관없음');
+ok(bash('a', 'env ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x').includes('"deny"') && bash('a', 'cd . && ORBIT_ALLOW_WORKLOG_ONLY_COMMIT=1 git commit -m x').includes('"deny"'), 'env·cd . 뒤에 붙인 허용 변수는 여전히 거절');
 process.exit(failed ? 1 : 0);
 NODE
 )"; S71_RC=$?
@@ -2592,6 +2617,90 @@ NODE
 )"; S73_RC=$?
 echo "${S73_OUT}"
 [ "${S73_RC}" = "0" ] || fail "시나리오 73 하위 항목 실패(위 ❌ 확인)"
+
+echo ""
+echo "== 시나리오 74: 장기기억 비교 시험 r1에서 나온 개선(0.2.20) =="
+R74="$WORK/scenario74"
+new_repo "$R74"
+node "$SKILL_DIR/scripts/install.mjs" apply --repo "$R74" --project-name "Scenario74" --slug scenario74 --mode new >/dev/null 2>&1
+cat > "$WORK/scenario74.cjs" <<'NODE'
+const fs = require('fs'); const path = require('path'); const { spawnSync } = require('child_process');
+const ROOT = process.cwd();
+let failed = false; const ok = (c, l) => { console.log(`  ${c ? '✅' : '❌'} ${l}`); if (!c) failed = true; };
+const git = (args, env = {}) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8', env: { ...process.env, ...env } });
+const hook = (mode, input, env = {}) => spawnSync(process.execPath, ['scripts/worklog-hook.mjs', mode], { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'cli', ORBIT_HEADLESS: '', ...env } });
+const tokenOf = (r) => (r.stdout.match(/--turn-token \\?"([0-9a-f]+)\\?"/) || [])[1];
+const append = (...args) => spawnSync(process.execPath, ['scripts/worklog.mjs', 'append', 'claude', ...args], { encoding: 'utf8' });
+
+// 1) --commit: 추적 중인 변경과 일지만 싣고, 추적하지 않는 새 파일은 싣지 않고 알린다. 마지막 줄에 결과를 남긴다.
+git(['add', '-A']); git(['commit', '-q', '-m', '처음']);
+fs.writeFileSync('tracked.js', 'a\n'); git(['add', 'tracked.js']); git(['commit', '-q', '-m', '추적 파일']);
+fs.writeFileSync('tracked.js', 'b\n'); fs.writeFileSync('secret-notes.md', '사용자 메모\n');
+const c1 = spawnSync(process.execPath, ['scripts/worklog.mjs', 'append', 'claude', '물음', '결과', '--commit', '작업 커밋'], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+const files = git(['show', '--name-only', '--format=', 'HEAD']).stdout.split('\n').filter(Boolean);
+ok(c1.status === 0 && files.includes('tracked.js') && files.some((f) => f.endsWith('worklog.md')), '--commit이 추적 중인 변경과 일지를 실음');
+ok(!files.includes('secret-notes.md') && c1.stderr.includes('secret-notes.md'), '추적하지 않는 새 파일은 싣지 않고 알림');
+ok(/커밋 결과: [0-9a-f]+ 만듦/.test(c1.stdout.trim().split('\n').at(-1)), '마지막 줄에 커밋 결과');
+fs.unlinkSync('secret-notes.md');
+
+// 2) 확인 칸 알림: 부정 문구·번복은 묻지 않고, 재발·고쳤다는 묻는다
+const vturn = (sid, result, extra = []) => {
+  const b = hook('begin', { session_id: sid, prompt: '요청', prompt_id: `${sid}p` });
+  append('물음', result, '--session-id', sid, '--turn-token', tokenOf(b), ...extra);
+  return hook('stop', { session_id: sid, prompt_id: `${sid}p` }).stdout;
+};
+ok(vturn('v1', '고친 것 없음(판단만)') === '', '"고친 것 없음"은 완료 주장이 아님');
+ok(vturn('v2', '수정하지 않고 원인만 찾음') === '', '"수정하지 않고"는 완료 주장이 아님');
+ok(vturn('v3', '버그를 고쳤다').includes('확인'), '"고쳤다"는 확인을 물음');
+ok(vturn('v4', '예산을 55만으로 바꿈', ['--topic', '예산', '--again', '번복']) === '', '번복은 확인을 묻지 않음');
+ok(vturn('v5', '살펴봄', ['--topic', '자정 버그', '--again', '재작업']).includes("'다시' 항목인데"), '재작업은 확인을 물음');
+
+// 3) 발견 알림의 도구 수는 마지막 사람 입력 뒤의 것만 센다(이어 받은 세션에서 앞 턴 도구까지 세던 문제)
+const T = path.join(ROOT, '..', 's74-t.jsonl');
+const lines = [{ type: 'user', promptId: 'P', message: { role: 'user', content: '앞 요청' } }];
+for (let i = 0; i < 30; i += 1) lines.push({ type: 'user', promptId: 'P', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `a${i}`, content: 'ok' }] } });
+lines.push({ type: 'user', promptId: 'P', message: { role: 'user', content: '이번 질문' } });
+for (let i = 0; i < 2; i += 1) lines.push({ type: 'user', promptId: 'P', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `b${i}`, content: 'ok' }] } });
+fs.writeFileSync(T, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+const fb = hook('begin', { session_id: 'f1', prompt: '이번 질문', prompt_id: 'P' });
+append('물음', '결과', '--session-id', 'f1', '--turn-token', tokenOf(fb));
+ok(hook('stop', { session_id: 'f1', prompt_id: 'P', transcript_path: T }).stdout === '', '앞 턴 도구 30번은 세지 않음(이번 턴 2번 → 알림 없음)');
+
+// 4) '다시' 감지: 에이전트끼리의 글은 사람 입력이 아님, 이어 갈 주제·예전 기록이 없으면 넣지 않음
+const fake = path.join(ROOT, '..', 's74-fake-claude.sh');
+const mark = path.join(ROOT, '..', 's74-called');
+fs.writeFileSync(fake, `#!/bin/sh\ntouch '${mark}'\necho '{"result":"{\\"again\\":true,\\"kind\\":\\"재발\\",\\"topic\\":null,\\"query\\":\\"없는낱말zzq\\",\\"why\\":\\"x\\"}"}'\n`, { mode: 0o755 });
+const again = (prompt) => spawnSync(process.execPath, ['scripts/again-hook.mjs'], { input: JSON.stringify({ session_id: 'g1', prompt }), encoding: 'utf8', env: { ...process.env, ORBIT_AGAIN_CLAUDE: fake, ORBIT_AGAIN_CHILD: '' } });
+const a1 = again('[Codex → Claude] 다시 검토한 답을 보낸다');
+ok(!fs.existsSync(mark) && a1.stdout === '', "'[Codex → Claude]' 머리말 글은 판단하지 않음");
+const a2 = again('그 버그 또 났어');
+ok(fs.existsSync(mark) && a2.stdout === '', '주제도 검색 기록도 없으면 주입하지 않음');
+
+// 5) ORBIT_HOOKS=off: 보조용 claude -p에서 기록 강제를 끈다
+const off = hook('begin', { session_id: 'o1', prompt: '요청', prompt_id: 'po' }, { ORBIT_HOOKS: 'off' });
+ok(off.stdout === '' && hook('stop', { session_id: 'o1', prompt_id: 'po' }, { ORBIT_HOOKS: 'off' }).stdout === '', 'ORBIT_HOOKS=off → 기록 훅 조용');
+
+// 6) tasks list --all: 앞날 예정·언젠가 할일도 보인다
+const task = (...args) => spawnSync(process.execPath, ['scripts/tasks.mjs', ...args], { encoding: 'utf8' });
+task('add', '먼 예정 일', '--owner', 'ai', '--action', 'planning', '--urgency', 'low', '--source', 't', '--due', '2099-01-01');
+task('add', '언젠가 할 일', '--owner', 'ai', '--action', 'someday', '--urgency', 'low', '--source', 't');
+const l1 = task('list').stdout, l2 = task('list', '--all').stdout;
+ok(!l1.includes('먼 예정 일') && l2.includes('먼 예정 일') && l2.includes('언젠가 할 일'), 'list --all이 앞날 Planning·Someday까지 보여 줌');
+
+// 7) '다시' 남용 알림(막지 않음)과 요약 범위 목록
+const ag1 = append('새 기능 시작', '결과', '--topic', '완전히 새 주제', '--again', '재요청');
+ok(ag1.status === 0 && ag1.stdout.includes("예전 기록이 없습니다"), "처음 쓰는 주제에 '다시' → 알림");
+append('이어서 작업', '결과', '--topic', '이음 주제');
+const ag2 = append('또 이어서', '결과', '--topic', '이음 주제', '--again', '재작업');
+ok(ag2.stdout.includes('바로 앞 항목'), "바로 앞 항목과 같은 주제에 '다시' → 이어서 하는 일일 수 있다고 알림");
+let hint = '';
+for (let i = 0; i < 4 && !hint.includes('요약할 때'); i += 1) hint = append(`질문${i}`, '결과').stdout;
+ok(hint.includes('요약 범위') && /#\d+ claude: 질문/.test(hint), '요약할 때 범위의 항목 목록을 함께 보여 줌');
+process.exit(failed ? 1 : 0);
+NODE
+S74_OUT="$(cd "$R74" && node "$WORK/scenario74.cjs")"; S74_RC=$?
+echo "${S74_OUT}"
+[ "${S74_RC}" = "0" ] || fail "시나리오 74 하위 항목 실패(위 ❌ 확인)"
 
 if [ "$FAIL" = "0" ]; then
   echo "전체 통과."

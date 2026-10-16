@@ -5,7 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { FIX_CLAIM } from './topic-lib.mjs';
+import { claimsFix } from './topic-lib.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const WORKLOG = path.join(ROOT, 'scripts', 'worklog.mjs');
@@ -19,6 +19,19 @@ const NOTICE_FLUSH_MS = 10 * 60 * 1000; // 가장 오래된 알림이 이보다 
 const LOCK_TIMEOUT_MS = 5000;
 const LOCK_STALE_MS = 30000;
 const MAX_DEBUG_DUMPS = 50;
+const MAX_DEFERRED = 5; // 다음 턴으로 미룬 알림 상한
+
+// 자동 실행(claude -p, SDK) 판별. 이때는 마지막 assistant 메시지 하나만 결과로 돌아가므로, Stop에서 막아
+// 기록 글을 하나 더 쓰게 하면 실제 답이 그 기록 글에 가려진다(장기기억 비교 시험 r1: orbit 오답 13개 중 11개).
+// Claude Code는 -p에서 CLAUDE_CODE_ENTRYPOINT=sdk-cli, 대화형에서 cli를 준다(2026-10-16 실측).
+// ORBIT_HEADLESS=on|off로 강제할 수 있다.
+export function isHeadless(env = process.env) {
+  const forced = String(env.ORBIT_HEADLESS ?? '').toLowerCase();
+  if (['1', 'on', 'true', 'yes'].includes(forced)) return true;
+  if (['0', 'off', 'false', 'no'].includes(forced)) return false;
+  return /^sdk/.test(String(env.CLAUDE_CODE_ENTRYPOINT || ''));
+}
+const HEADLESS_REPEAT = '자동 실행(claude -p 등)이라 마지막 메시지 하나만 결과로 남습니다. 기록한 뒤에는 바로 앞의 최종 답을 빠짐없이 그대로 다시 쓰고 끝내세요("기록했습니다" 같은 말로 끝내지 않습니다).';
 
 // 백그라운드 작업 완료 알림. Claude Code는 이 알림을 사용자 입력처럼 전달하고 UserPromptSubmit
 // 훅도 돌린다. 이때 prompt에는 이 블록만 들어 있다(2026-09-24 입력 덤프로 확인).
@@ -180,6 +193,8 @@ function normalizeState(previous, input) {
     entryPromptIds: Array.isArray(previous?.entryPromptIds) ? previous.entryPromptIds : [],
     foundNudged: previous?.foundNudged ?? null,
     verifyNudged: previous?.verifyNudged ?? null,
+    // 자동 실행에서 Stop 때 막지 않고 다음 사용자 턴 안내로 미룬 '발견'·'확인' 알림.
+    deferredNudges: Array.isArray(previous?.deferredNudges) ? previous.deferredNudges.slice(-MAX_DEFERRED) : [],
   };
 }
 
@@ -434,6 +449,7 @@ function beginUser(input, state, promptId) {
 
   const counter = state.counter + 1;
   const token = crypto.randomBytes(8).toString('hex');
+  const deferred = state.deferredNudges;
   let merged = [];
   if (previous) merged = [...previous.merged, { turn: previous.turn, token: previous.token }].slice(-MAX_MERGED);
   const next = {
@@ -446,12 +462,16 @@ function beginUser(input, state, promptId) {
       transcript: input.transcript_path ? String(input.transcript_path) : null,
     },
     lastPromptId: promptId,
+    deferredNudges: [],
   };
   writeState(input, next);
   const mergedNote = previous
     ? `\n앞 턴(#${previous.turn})이 기록되지 않은 채 끝나(중단 등) 이 턴에 합쳤습니다. 두 입력을 함께 요약해 위 명령으로 한 번만 기록하세요.`
     : '';
-  plan.context = `이번 사용자 턴(#${counter})은 아직 worklog에 기록되지 않았습니다. 최종 답변 전에 다음 형식으로 실제 물음과 결과를 요약해 실행하세요:\n${appendCommand(next.sessionId, token)}${mergedNote}\n명령이 성공하기 전에는 최종 답변을 보내지 않습니다.`;
+  const deferredNote = deferred.length
+    ? `\n\n지난 턴 기록에서 빠진 칸이 있습니다(자동 실행이라 그 턴 끝에서 막지 않고 미뤘습니다). 이번 턴 기록 전에 채우세요:\n${deferred.join('\n')}`
+    : '';
+  plan.context = `이번 사용자 턴(#${counter})은 아직 worklog에 기록되지 않았습니다. 최종 답변 전에 다음 형식으로 실제 물음과 결과를 요약해 실행하세요:\n${appendCommand(next.sessionId, token)}${mergedNote}\n명령이 성공하기 전에는 최종 답변을 보내지 않습니다.${deferredNote}`;
   return plan;
 }
 
@@ -584,15 +604,25 @@ function worklogBlock(entry) {
 
 // 이번 턴의 도구 사용 수: 세션 기록에서 그 턴의 prompt_id가 붙은 도구 결과(tool_result)를 센다.
 // (assistant 항목에는 prompt_id가 없고, 도구 결과를 담은 user 항목에는 있다.)
+// 마지막 사람 입력 뒤의 것만 센다 — 이어 받은 세션(--resume)에서 앞 턴들의 도구까지 199번으로 센 일이 있었다(r1 M1).
+function isHumanEntry(entry) {
+  if (entry?.type !== 'user' || entry.isMeta || entry.message?.role !== 'user') return false;
+  const content = entry.message.content;
+  if (typeof content === 'string') return true;
+  return Array.isArray(content) && content.some((part) => part?.type === 'text') && !content.some((part) => part?.type === 'tool_result');
+}
+
 function countTurnTools(transcriptPath, promptIds) {
   if (!transcriptPath || !promptIds.size) return 0;
   let text;
   try { text = fs.readFileSync(transcriptPath, 'utf8'); } catch { return 0; }
   let count = 0;
   for (const line of text.split('\n')) {
-    if (!line.includes('"tool_result"')) continue;
+    const maybeHuman = line.includes('"type":"user"') && !line.includes('"tool_result"');
+    if (!line.includes('"tool_result"') && !maybeHuman) continue;
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
+    if (isHumanEntry(entry)) { count = 0; continue; }
     if (!promptIds.has(entry.promptId) || !Array.isArray(entry.message?.content)) continue;
     count += entry.message.content.filter((part) => part?.type === 'tool_result').length;
   }
@@ -628,8 +658,9 @@ function verifyNudge(input, state, promptId) {
   const block = worklogBlock(entry);
   if (!block || /^- 확인:/m.test(block)) return null;
   const result = (block.match(/^- 결과: (.*)$/m) || [])[1] || '';
-  const again = /^- 다시:/m.test(block);
-  if (!again && !FIX_CLAIM.test(result)) return null;
+  // 번복·재요청은 정한 것을 바꾸거나 다시 꺼낸 것이라 확인할 '고친 결과'가 없다. 재발·재작업만 확인을 묻는다.
+  const again = /^- 다시: *(재발|재작업)/m.test(block);
+  if (!again && !claimsFix(result)) return null;
   withStateLock(input, () => {
     const { state: current, error } = readStateRaw(input);
     if (!error) writeState(input, { ...normalizeState(current, input), verifyNudged: entry });
@@ -704,14 +735,28 @@ function handleStop(input) {
     const reasons = [];
     if (nudge) reasons.push(`도구를 ${nudge.tools}번 쓴 턴인데 worklog #${nudge.entry}에 '발견'이 없습니다. 이번 턴에 알아낸 것(원인·제약·동작 방식)을 한 줄 남기세요. 없으면 "없음"이라고 적습니다:\nnode scripts/worklog.mjs found claude ${nudge.entry} "<발견>"`);
     if (verify) reasons.push(`worklog #${verify.entry}에 ${verify.again ? "'다시' 항목인데" : '고쳤다·해결했다고 적었는데'} 무엇으로 확인했는지('확인')가 없습니다. 재현·테스트·실행 결과를 한 줄 남기세요. 확인하지 못했으면 "미확인"이라고 적습니다(다음 세션이 이 완료 기록을 그대로 믿지 않게):\nnode scripts/worklog.mjs verified claude ${verify.entry} "<확인 방법과 결과>"`);
-    if (reasons.length) process.stdout.write(JSON.stringify({ decision: 'block', reason: reasons.join('\n\n') }));
+    if (!reasons.length) return;
+    if (isHeadless()) {
+      // 자동 실행: 막으면 기록 글이 답을 가린다. 다음 사용자 턴 안내로 미룬다(한 번만 — nudged 표시는 위에서 남겼다).
+      const lines = [];
+      if (nudge) lines.push(`- worklog #${nudge.entry} '발견': node scripts/worklog.mjs found claude ${nudge.entry} "<발견 또는 없음>"`);
+      if (verify) lines.push(`- worklog #${verify.entry} '확인': node scripts/worklog.mjs verified claude ${verify.entry} "<확인 방법과 결과 또는 미확인>"`);
+      withStateLock(input, () => {
+        const { state: current, error } = readStateRaw(input);
+        if (error) return;
+        const state = normalizeState(current, input);
+        writeState(input, { ...state, deferredNudges: [...state.deferredNudges, ...lines].slice(-MAX_DEFERRED) });
+      });
+      return;
+    }
+    process.stdout.write(JSON.stringify({ decision: 'block', reason: reasons.join('\n\n') }));
     return;
   }
 
   if (decision.kind === 'block') {
     process.stdout.write(JSON.stringify({
       decision: 'block',
-      reason: `이번 사용자 턴(#${workingState.pending.turn})의 worklog가 기록되지 않았습니다${pendingNote(workingState.pending)}. 최종 답변 전에 다음 명령을 실제 요약으로 채워 실행하세요:\n${appendCommand(workingState.sessionId, workingState.pending.token)}`,
+      reason: `이번 사용자 턴(#${workingState.pending.turn})의 worklog가 기록되지 않았습니다${pendingNote(workingState.pending)}. 최종 답변 전에 다음 명령을 실제 요약으로 채워 실행하세요:\n${appendCommand(workingState.sessionId, workingState.pending.token)}${isHeadless() ? `\n${HEADLESS_REPEAT}` : ''}`,
     }));
     return;
   }
@@ -792,6 +837,7 @@ function handleStop(input) {
 
 const input = readInput();
 const mode = process.argv[2];
+if (String(process.env.ORBIT_HOOKS || '').toLowerCase() === 'off') process.exit(0); // 보조용 claude -p 등에서 기록·기억 훅을 끈다(푸시 지킴이는 그대로)
 
 try {
   if (mode === 'begin') handleBegin(input);

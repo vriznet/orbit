@@ -12,6 +12,11 @@ export const AGAIN_KINDS = ['번복', '재발', '재요청', '재작업'];
 
 // "고쳤다·해결했다"류 — 확인 없이 적힌 완료 주장을 가려낸다(종료 훅 알림, 흐름의 '완료 기록' 표시).
 export const FIX_CLAIM = /(고쳤|고침|고쳐\s?놓|수정했|수정함|수정\s?완료|해결했|해결함|해결됨|해결\s?완료|바로잡|fixed|resolved)/i;
+// 부정·남의 일로 쓴 말("고친 것 없음", "고치지 않았다", "해결되지 않음")은 완료 주장이 아니다 — 확인 알림 오탐(r1 #514).
+const NOT_FIXED = /(고친|고칠|수정한|수정할|해결한|해결할)\s*(것|게|건|데)?\s*(은|는|이|가)?\s*(없|아니|못)|(고치|수정하|해결하|바로잡)지\s*(않|못|말)|해결\s*(되지|안\s*됨|안\s*됐|못)|(not|never)\s+(fixed|resolved)/gi;
+export function claimsFix(text) {
+  return FIX_CLAIM.test(String(text ?? '').replace(NOT_FIXED, ' '));
+}
 // 흐름 표시용으로 조금 더 넓게 본 완료 주장(구현 완료·끝냄 포함).
 const DONE_CLAIM = /(고쳤|고침|수정했|수정함|해결|완료|끝냈|마쳤|구현했|fixed|resolved|done)/i;
 

@@ -277,6 +277,7 @@ function stop(input) {
     const promptIds = new Set();
     let skippedLast = false;
     let notices = 0;
+    let shell = 0;
     let stopFeedback = false;
     for (const entry of entries) {
       if (entry?.promptId) promptIds.add(entry.promptId);
@@ -284,6 +285,9 @@ function stop(input) {
       if (isHumanPrompt(entry)) {
         const text = textOf(entry).trim();
         if (isNotification(text)) notices += 1;
+        // 사람이 친 `! 명령`(<bash-input>)은 요청이 아니라 명령이고 비밀값이 섞이기 쉽다 — 턴 이름(대화 사본의 사용자 칸)에
+        // 쓰지 않는다. r1 세션에서 파일 기억이 토큰 저장 명령 글을 과거 턴 이름으로 다시 넣은 일이 있었다.
+        else if (/^<bash-input>/.test(text)) shell += 1;
         else user.push(text);
       } else if (entry?.type === 'assistant') {
         for (const use of toolUses(entry)) tools.push(toolActivity(use, entry.timestamp));
@@ -329,7 +333,7 @@ function stop(input) {
         promptIds: [...promptIds],
         continued: user.length === 0,
         // 사람 입력 없이 시작한 턴(백그라운드 알림 등)은 빈칸 대신 표시를 남긴다.
-        user: user.length ? redactPrefix(user.join('\n\n'), TEXT_LIMIT) : notices ? '(자동 알림)' : '(사용자 입력 없음)',
+        user: user.length ? redactPrefix(user.join('\n\n'), TEXT_LIMIT) : notices ? '(자동 알림)' : shell ? '(셸 명령만 — 명령 글은 남기지 않음)' : '(사용자 입력 없음)',
         assistant: redactPrefix(assistant.join('\n\n'), TEXT_LIMIT),
         files,
         filesEstimated: true,
@@ -514,6 +518,7 @@ function realPath(file) {
 const isMain = Boolean(process.argv[1]) && realPath(process.argv[1]) === realPath(fileURLToPath(import.meta.url));
 if (isMain) {
   const mode = process.argv[2];
+  if (String(process.env.ORBIT_HOOKS || '').toLowerCase() === 'off') process.exit(0); // 보조용 claude -p 등에서 기록·기억 훅을 끈다(푸시 지킴이는 그대로)
   if (!MODES[mode]) {
     process.stderr.write(`사용법: memory-hook <${Object.keys(MODES).join('|')}>\n`);
     process.exit(1);
