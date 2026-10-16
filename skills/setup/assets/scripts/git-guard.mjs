@@ -120,7 +120,8 @@ function outsideQuotes(line, index) {
 // 파일에 글을 쓰는 heredoc 본문만 뺀다. 명령 **전체**가 단순한 파일 쓰기 heredoc 하나일 때만이다:
 // 첫 줄이 `cat <<'EOF' > 파일` · `cat > 파일 <<'EOF'` · `tee [-a] 파일 <<'EOF' [>/dev/null]` 꼴이고(구분자에 따옴표),
 // 끝 구분자 뒤에 다른 명령이 없을 때. 그 밖의 꼴(다른 명령과 섞임, 조건문·묶음·파이프, 문자열 속 예시)은 본문도 명령으로 본다.
-const FILE_WRITE = /^\s*(?:cat\s*<<-?\s*(['"])([A-Za-z_][\w-]*)\1\s*>>?\s*[^\s|;&<>]+|cat\s*>>?\s*[^\s|;&<>]+\s*<<-?\s*(['"])([A-Za-z_][\w-]*)\3|tee(?:\s+-a)?\s+[^\s|;&<>-][^\s|;&<>]*\s*<<-?\s*(['"])([A-Za-z_][\w-]*)\5(?:\s*>\s*\/dev\/null)?)\s*$/;
+const FILE_NAME = String.raw`[A-Za-z0-9._/~+@%,=-]+`; // 따옴표·공백·셸 특수문자 없는 파일 이름만(열린 따옴표 꼼수 차단)
+const FILE_WRITE = new RegExp(String.raw`^\s*(?:cat\s*<<-?\s*(['"])([A-Za-z_][\w-]*)\1\s*>>?\s*${FILE_NAME}|cat\s*>>?\s*${FILE_NAME}\s*<<-?\s*(['"])([A-Za-z_][\w-]*)\3|tee(?:\s+-a)?\s+(?!-)${FILE_NAME}\s*<<-?\s*(['"])([A-Za-z_][\w-]*)\5(?:\s*>\s*\/dev\/null)?)\s*$`);
 export function stripHeredocs(command) {
   const raw = String(command || '');
   const lines = raw.replace(/\n+$/, '').split('\n');
@@ -182,25 +183,32 @@ function realFrom(from, p) {
   try { return fs.realpathSync.native(raw); } catch { return null; } // native: OS가 링크를 먼저 따라간 뒤 .. 를 푼다
 }
 
-// 허용 변수가 이 저장소의 명령에 붙었는지. 다른 저장소 면제는 확실히 해석되는 두 꼴에만 준다:
-//   VAR=1 git [-C <경로>] …            (한 조각, 시작 폴더는 훅 입력 cwd)
-//   cd <경로> && VAR=1 git [-C <경로>] …  (옵션 없는 cd 하나 + 그 조각)
-// 그 밖의 꼴(다른 조각이 더 있음, 하위 셸, export, 경로를 풀 수 없음)은 이 저장소로 본다(막음).
+// 허용 변수가 이 저장소의 명령에 붙었는지. 다른 저장소 면제는 확실히 해석되는 꼴에만 준다:
+//   VAR=1 git [-C <경로>] commit …            (한 조각, 시작 폴더는 훅 입력 cwd)
+//   cd <경로> && VAR=1 git [-C <경로>] commit …  (옵션 없는 cd 하나 + 그 조각)
+// 다른 환경 대입(GIT_DIR 등)·다른 git 옵션(-C 둘 이상, --git-dir, --work-tree, -c …)·다른 조각·하위 셸·export·
+// 풀 수 없는 경로는 이 저장소로 본다(막음).
+// 경로 규칙은 둘이 다르다: 셸 cd는 논리 경로(앞 폴더 문자열 + 경로를 정리한 뒤 실제 폴더), git -C는 물리 경로
+// (실제 폴더에서 링크를 먼저 따라간 뒤 ..). 시작 폴더는 훅 입력 cwd를 논리 경로로 쓴다.
+const EXEMPT_GIT = () => new RegExp(String.raw`^\s*${ALLOW_ENV}=\S*\s+git(?:\s+-C\s+([^\s'"]+))?\s+commit(?:\s|$)`);
 export function allowEnvForThisRepo(command, root = ROOT, start = root) {
   if (!usesAllowEnv(command)) return false;
   const parts = segments(command);
   if (!parts || exported().test(stripQuoted(stripHeredocs(command)))) return true;
-  let cwd = realFrom(path.resolve(start), '.');
+  const physical = (logical) => { try { return fs.realpathSync.native(logical); } catch { return null; } };
+  let logical = path.resolve(start);
   let rest = parts;
   if (parts.length === 2 && parts[1].sep === '&&') {
-    const cd = /^\s*cd\s+([^\s-]\S*)\s*$/.exec(parts[0].text);
+    const cd = /^\s*cd\s+([^\s'"-][^\s'"]*)\s*$/.exec(parts[0].text);
     if (!cd) return true;
-    cwd = realFrom(cwd, cd[1]);
+    logical = path.resolve(logical, cd[1].replace(/^~(?=\/|$)/, process.env.HOME || '~'));
     rest = [parts[1]];
   }
-  if (rest.length !== 1 || !assignAny().test(rest[0].text) || !/^\s*(?:[A-Za-z_]\w*=\S*\s+)*git\b/.test(rest[0].text)) return true;
-  const dashC = /^\s*(?:[A-Za-z_]\w*=\S*\s+)*git\s+(?:-c\s+\S+\s+)*-C\s+(\S+)/.exec(rest[0].text);
-  const target = dashC ? realFrom(cwd, dashC[1]) : cwd;
+  if (rest.length !== 1) return true;
+  const git = EXEMPT_GIT().exec(rest[0].text);
+  if (!git) return true;
+  const here = physical(logical);
+  const target = git[1] ? realFrom(here, git[1]) : here;
   return !target || inside(root, target);
 }
 

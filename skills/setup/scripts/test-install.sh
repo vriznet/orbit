@@ -2724,6 +2724,12 @@ ok(pre(other4, `command cd ${ROOT} && ${V}=1 git commit -m x`).includes('"deny"'
 fs.mkdirSync('child2', { recursive: true }); fs.symlinkSync(path.join(ROOT, 'child2'), path.join(other4, 'lnk'));
 ok(pre(other4, `${V}=1 git -C lnk/.. commit -m x`).includes('"deny"'), 'git -C 링크/.. 는 링크를 따라간 뒤 .. (이 저장소)');
 ok(pre(other4, `${V}=1 git commit -m x`) === '', '실제 다른 저장소 폴더에서 한 커밋은 면제');
+// Codex 5차: 파일 이름의 열린 따옴표, git 대상 선택 옵션·환경, 셸 cd의 논리 경로
+ok(gbash(`cat > "note <<'EOF'\n"\ngit push\n: <<'EOF'\nEOF`).includes('"deny"'), '따옴표가 든 파일 이름은 파일 쓰기 heredoc으로 보지 않음');
+ok(pre(ROOT, `${V}=1 git -C ${other4} -C ${ROOT} commit -m x`).includes('"deny"') && pre(other4, `${V}=1 git --git-dir=${ROOT}/.git --work-tree=${ROOT} commit -m x`).includes('"deny"') && pre(other4, `GIT_DIR=${ROOT}/.git GIT_WORK_TREE=${ROOT} ${V}=1 git commit -m x`).includes('"deny"'), '-C 여러 개·--git-dir·GIT_DIR 같은 대상 선택은 면제하지 않음');
+fs.mkdirSync(path.join(other4, 'kid'), { recursive: true }); fs.symlinkSync(path.join(other4, 'kid'), path.join(ROOT, 'out-link'));
+ok(pre(ROOT, `cd out-link/.. && ${V}=1 git commit -m x`).includes('"deny"'), '셸 cd는 논리 경로(링크/.. → 원래 폴더)로 계산');
+fs.unlinkSync(path.join(ROOT, 'out-link'));
 
 // ORBIT_HOOKS=off면 훅이 부르는 catchup·recent도 조용하고, 남의 밀린 표시를 지우지 않는다
 append('동료 결과', 'r');
